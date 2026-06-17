@@ -1,0 +1,73 @@
+ASIO AUDIO ROUTER USER GUIDE
+
+1. What ASIO Audio Router Does
+
+ASIO Audio Router lets you route audio from apps, microphones, devices, screen readers, TTS engines, communications apps, OBS, and future VoiceLink/TCast workflows.
+
+It is designed so blind users can operate it with NVDA, JAWS, Narrator, and keyboard-only navigation.
+
+2. Important Default Channels
+
+1/2: Main Out.
+61/62: Screen Reader Bus.
+63/64: TTS Bus.
+65/66: Communications Bus.
+67/68: Emergency Accessibility Bus.
+
+3. Screen Reader Audio
+
+Screen reader audio is protected by default.
+
+By default, NVDA, JAWS, and Narrator should go to your selected headphones or accessibility output and should not be included in recordings or streams.
+
+You may change this in Settings, but the system should never leak screen reader audio into OBS by accident.
+
+4. TTS Audio
+
+TTS from OpenClaw, AI assistants, VoiceLink assistants, or future agents can use the TTS Bus.
+
+By default, TTS goes where you choose and stays separate from screen readers and program audio.
+
+5. Smart I/O
+
+When you plug in a device, ASIO Audio Router can ask what kind of device it is and remember it.
+
+Examples:
+- Microphone.
+- Headphones.
+- Audio Interface.
+- Virtual Device.
+- Accessibility Device.
+
+6. Smart Buffer
+
+Smart Buffer watches CPU, glitches, plugin load, and timing. It can raise the buffer when audio is unstable and lower it after the system becomes stable.
+
+7. OBS Use
+
+Use separate tracks instead of one desktop audio track.
+
+Example:
+Chrome to 3/4.
+Mic to 7/8.
+VoiceLink to 65/66.
+Screen reader stays headphones only.
+
+8. Emergency Mute
+
+Press Ctrl+Shift+M to mute outputs quickly during feedback or unexpected routing.
+
+9. Keyboard Basics
+
+Tab and Shift+Tab move between controls.
+Arrow keys adjust sliders.
+Enter activates.
+Space toggles.
+Ctrl+Shift+P opens the command palette.
+Ctrl+Shift+M activates emergency mute.
+
+10. Troubleshooting
+
+If you hear feedback, press Ctrl+Shift+M.
+If a device disappears, reconnect it and allow Smart I/O to restore the profile.
+If your screen reader is heard on stream, check Screen Reader Bus settings and confirm include in stream is off.

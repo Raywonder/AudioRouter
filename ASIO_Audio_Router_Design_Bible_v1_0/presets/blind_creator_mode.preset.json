@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "name": "Blind Creator Mode",
+  "routes": [
+    {
+      "source": "NVDA",
+      "class": "screen_reader",
+      "destination": "Headphones",
+      "include_in_stream": false,
+      "include_in_recording": false
+    },
+    {
+      "source": "OpenClaw TTS",
+      "class": "tts",
+      "destination": "Headphones",
+      "include_in_stream": false,
+      "include_in_recording": false
+    },
+    {
+      "source": "Chrome",
+      "class": "program",
+      "destination": "ASIO 3/4",
+      "include_in_stream": true,
+      "include_in_recording": true
+    },
+    {
+      "source": "Microphone",
+      "class": "program",
+      "destination": "ASIO 7/8",
+      "include_in_stream": true,
+      "include_in_recording": true
+    }
+  ]
+}

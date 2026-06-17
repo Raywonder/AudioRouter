@@ -1,0 +1,1768 @@
+ASIO AUDIO ROUTER DESIGN BIBLE V1.0
+
+Generated: 2026-06-17 UTC
+
+
+
+================================================================================
+
+Volume 01 Product Vision
+
+================================================================================
+
+
+# Volume 01 - Product Vision, Core Principles, Design Goals, Accessibility Philosophy, and System Requirements
+
+## Purpose
+
+This volume defines why ASIO Audio Router exists and what every future design decision must protect.
+
+ASIO Audio Router is an accessibility-first Windows audio routing platform for creators, streamers, podcasters, broadcasters, blind users, accessibility trainers, VoiceLink hosts, TCast users, OBS users, and advanced audio workflows.
+
+The first goal is not to be flashy. The first goal is to be reliable, understandable, and usable without sighted assistance.
+
+## Problem Statement
+
+Current Windows audio-routing tools are often built around visual patch bays, unlabeled sliders, complex virtual mixers, and mouse-driven controls. Many tools work for sighted audio engineers, but become painful or impossible for blind users using NVDA, JAWS, or Narrator.
+
+Common problems include:
+
+- Unlabeled controls.
+- Visual-only meters.
+- Mouse-only patching.
+- Confusing device names.
+- Routes that reset after reboot.
+- Screen reader audio accidentally entering streams or recordings.
+- Manual buffer tuning that most users do not understand.
+- Inaccessible plug-in interfaces.
+- No clear recovery when devices disconnect.
+- No safe emergency mute workflow.
+
+ASIO Audio Router exists to solve these problems with a design that treats accessibility as infrastructure.
+
+## Mission
+
+Build the most accessible professional audio routing platform available for Windows.
+
+The platform should allow a blind creator to install, route, record, stream, monitor, diagnose, recover, and continue working without requiring sighted assistance.
+
+## Priority Order
+
+Every future feature must be judged in this order:
+
+1. Accessibility.
+2. Reliability.
+3. Audio quality.
+4. Performance.
+5. Flexibility.
+6. Features.
+7. Visual polish.
+
+A visually attractive feature that is inaccessible is incomplete. A fast feature that can crash the audio engine is unacceptable. A powerful route that can create feedback without warning must be blocked by default.
+
+## Primary Product Goals
+
+ASIO Audio Router must provide:
+
+- A 68 input / 68 output virtual ASIO routing system.
+- A user-mode audio engine separated from the UI.
+- A wxPython control panel optimized for NVDA, JAWS, and Narrator.
+- WASAPI app capture and per-application routing.
+- Smart I/O device detection and automatic device profiles.
+- Smart Buffer adaptive latency management.
+- CLAP and VST3 plug-in hosting.
+- Accessible plug-in parameter controls.
+- Independent screen reader, TTS, communications, monitoring, notification, program, recording, and broadcast audio classes.
+- Safe feedback prevention.
+- Preset and project restoration.
+- OBS workflows.
+- Future hooks for VoiceLink and TCast without making the first release depend on those apps.
+
+## Audio Classes
+
+Not all audio is equal. The engine must understand audio classes as first-class route categories.
+
+The initial audio classes are:
+
+1. Program Audio.
+2. Communications Audio.
+3. Screen Reader Audio.
+4. TTS Audio.
+5. Monitoring Audio.
+6. Notification Audio.
+7. Recording Audio.
+8. Broadcast Audio.
+9. Emergency Accessibility Audio.
+
+Each class must be independently routable, monitorable, recordable, streamable, controllable, muted, soloed, persisted, and protected.
+
+## Screen Reader Audio Rule
+
+Screen reader audio is a first-class protected audio source.
+
+Screen readers include:
+
+- NVDA.
+- JAWS.
+- Narrator.
+- Future VoiceOver or other accessibility tools.
+
+By default, screen reader audio must not enter OBS, streams, recordings, VoiceLink send paths, or public broadcast outputs.
+
+Recommended internal pair:
+
+- 61/62: Screen Reader Bus.
+
+The user may intentionally route screen reader audio to Main 1/2, headphones, a virtual device, or another output, but this must never happen by accident.
+
+## TTS Audio Rule
+
+TTS audio is not always screen reader audio.
+
+TTS may come from:
+
+- OpenClaw.
+- AI assistants.
+- VoiceLink assistant.
+- Cloud TTS.
+- Automation announcements.
+- Future agents.
+
+Recommended internal pair:
+
+- 63/64: TTS Bus.
+
+TTS should have independent routing from screen readers so an AI assistant can be heard by the creator without leaking into a stream unless the user intentionally enables it.
+
+## Communications Audio Rule
+
+Communications audio includes apps like VoiceLink, Discord, Zoom, Teams, softphones, and communication clients.
+
+Recommended internal pair:
+
+- 65/66: Communications Bus.
+
+Communications audio often needs to be heard by the host but excluded from public output, or recorded separately for editing.
+
+## Emergency Accessibility Bus
+
+Critical warnings, emergency mutes, clipping alerts, feedback warnings, and severe device failures need a protected notification path.
+
+Recommended internal pair:
+
+- 67/68: Emergency Accessibility Bus.
+
+This bus should remain available even when the rest of the routing system is in Safe Mode.
+
+## Main Output Rule
+
+Outputs 1/2 are Main Out.
+
+Main Out is the primary monitor/program output. It must be protected from accidental self-loopback and feedback. No source should automatically self-route into Main Out in a way that creates a loop.
+
+Inputs 1/2 should not self-loop to outputs 1/2 by default.
+
+## Smart I/O Vision
+
+When an audio device appears, the system should detect, classify, profile, and restore it.
+
+Example:
+
+A Rodecaster Pro 2 is connected. The system learns:
+
+- Input 1: Host Mic.
+- Input 2: Guest Mic.
+- Output 1/2: Studio Monitors.
+- Output 3/4: Stream Feed.
+- Output 5/6: Headphones.
+- Preferred screen reader destination: Headphones.
+
+Next time the device is connected, the profile restores automatically.
+
+## Smart Buffer Vision
+
+Users should not need to manually understand callback pressure, buffer sizes, sample rates, drift, underruns, or plug-in CPU cost to get stable audio.
+
+Smart Buffer should observe the system and tune latency safely. It should increase buffer size when needed and reduce it only after sustained stability.
+
+## Accessibility Success Definition
+
+A blind creator can:
+
+- Install the software.
+- Identify devices.
+- Set a default microphone.
+- Set a default monitor.
+- Route a screen reader to headphones.
+- Keep TTS separate from program audio.
+- Route Chrome to a pair.
+- Route OBS to a recording bus.
+- Load a mic processing rack.
+- Enable Smart Buffer.
+- Recover from device disconnects.
+- Export diagnostics.
+
+without sighted assistance.
+
+## First Release Scope
+
+The first release should focus on the ASIO Router core:
+
+- wxPython UI shell.
+- Native C++ audio engine.
+- 68x68 internal routing model.
+- Screen Reader Bus.
+- TTS Bus.
+- Smart I/O model.
+- Smart Buffer model.
+- Feedback prevention.
+- Configuration persistence.
+- Basic WASAPI detection.
+- ASIO driver design and registration path.
+- Codex-friendly architecture docs.
+
+VoiceLink, TCast, marketplace, cloud sync, AI assistant, and network audio are future hooks. They must not distract from the first ASIO Router foundation.
+
+
+
+================================================================================
+
+Volume 02 Audio Engine
+
+================================================================================
+
+
+# Volume 02 - Audio Engine Architecture, Routing Graph, Threading Model, Processing Pipeline, and Real-Time Systems
+
+## Purpose
+
+The Audio Engine is the heart of ASIO Audio Router. Every audio sample that is captured, routed, monitored, processed, recorded, or streamed eventually touches the engine.
+
+The engine must remain independent from the UI. If the wxPython control panel closes, audio should continue or fail safely.
+
+## Core Subsystems
+
+The engine contains:
+
+- Audio Core.
+- Routing Graph.
+- Channel Manager.
+- Device Manager.
+- Smart I/O Manager.
+- Smart Buffer Manager.
+- WASAPI Capture Manager.
+- ASIO Transport Layer.
+- Plugin Host Bridge.
+- Monitoring Manager.
+- Recording/Broadcast Bus Manager.
+- Accessibility Event Bridge.
+- Diagnostics Collector.
+
+## Engine Responsibilities
+
+The engine is responsible for:
+
+- Routing audio.
+- Managing graph state.
+- Managing real-time audio callbacks.
+- Tracking device state.
+- Applying gain, mute, solo, pan, and bus assignment.
+- Hosting or connecting to plug-in processing chains.
+- Providing telemetry.
+- Applying feedback prevention rules.
+- Maintaining clock and buffer state.
+- Persisting runtime route state through the configuration layer.
+
+## Engine Non-Responsibilities
+
+The engine must not:
+
+- Render UI.
+- Depend on wxPython.
+- Show dialogs.
+- Scan the marketplace.
+- Validate licenses inside the audio callback.
+- Perform cloud sync inside real-time paths.
+- Make network calls on the audio thread.
+- Log from the audio callback.
+- Allocate memory in the audio callback.
+
+## Thread Model
+
+Recommended threads:
+
+- Audio Thread: highest priority, real-time callback.
+- Capture Thread: WASAPI app/device capture.
+- Plugin Thread: plug-in processing and rack preparation.
+- Device Watcher Thread: device change events.
+- Smart Buffer Thread: telemetry analysis and staged buffer decisions.
+- Accessibility Thread: screen reader/status event processing.
+- IPC Thread: UI/service communication.
+- Background Thread: scans, logs, diagnostics, config writes.
+
+## Audio Thread Rules
+
+The audio thread must never:
+
+- Block.
+- Sleep.
+- Allocate heap memory.
+- Log.
+- Wait on a mutex.
+- Access the UI.
+- Open files.
+- Call network APIs.
+- Load or unload plug-ins.
+- Resize buffers directly.
+
+The audio thread should only process already prepared buffers, routes, and graph snapshots.
+
+## Routing Graph
+
+The Routing Graph represents all audio flow as nodes and edges.
+
+Node types:
+
+- Source Node.
+- Gain Node.
+- Pan Node.
+- Meter Node.
+- Processor Node.
+- Plugin Rack Node.
+- Bus Node.
+- Monitor Node.
+- Recorder Node.
+- Output Node.
+
+Example:
+
+Chrome Source -> Gain -> Plugin Rack -> Broadcast Bus -> OBS Output.
+
+## Graph Update Model
+
+Routes are edited outside the audio callback. Changes are staged into a new graph snapshot. At a safe boundary, the engine swaps from the old graph snapshot to the new one.
+
+This prevents partial graph updates from corrupting active audio.
+
+## Audio Classes in the Engine
+
+The engine must maintain audio class metadata for every source.
+
+Examples:
+
+- Chrome: Program Audio.
+- VoiceLink: Communications Audio.
+- NVDA: Screen Reader Audio.
+- OpenClaw: TTS Audio.
+- Critical warning: Emergency Accessibility Audio.
+
+Routing policies are based on this metadata.
+
+## Protected Buses
+
+Recommended reserved buses:
+
+- 61/62: Screen Reader Bus.
+- 63/64: TTS Bus.
+- 65/66: Communications Bus.
+- 67/68: Emergency Accessibility Bus.
+
+These can be user-configured, but defaults must protect privacy.
+
+## Monitoring Architecture
+
+Monitoring must be separate from recording and broadcast routing.
+
+A user should be able to mute headphones without muting the stream. A user should be able to exclude screen reader audio from broadcast while still hearing it locally.
+
+## Recording Architecture
+
+Recording buses should be independent. OBS or future recorders should be able to receive:
+
+- Program Mix.
+- Communications Mix.
+- Mic Track.
+- App Track.
+- TTS Track if user explicitly includes it.
+- Screen Reader Track only if user explicitly includes it.
+
+Default behavior excludes screen reader and accessibility/TTS audio from public outputs.
+
+## Device Manager
+
+The Device Manager tracks ASIO, WASAPI, USB, Bluetooth, virtual, and future network devices.
+
+It stores:
+
+- Device ID.
+- Friendly name.
+- User label.
+- Device class.
+- Input count.
+- Output count.
+- Supported sample rates.
+- Preferred sample rate.
+- Preferred buffer.
+- Preferred role.
+- Accessibility role.
+- Health status.
+
+## Smart I/O Pipeline
+
+Device connected -> Identify -> Classify -> Match profile -> Apply defaults -> Create nodes -> Restore routes -> Announce status.
+
+Example:
+
+"Scarlett connected. Restored Host Mic, Studio Monitors, and Headphones."
+
+## Accessibility Event Bridge
+
+The audio engine emits structured events. It does not speak directly.
+
+Example event:
+
+- type: route_blocked
+- severity: warning
+- source: Chrome
+- reason: feedback risk
+- text: Chrome route blocked due to feedback risk.
+
+The Accessibility Service converts this into status text and optional speech.
+
+## Diagnostics
+
+Diagnostics include:
+
+- Underruns.
+- Overruns.
+- Drift events.
+- Callback pressure.
+- Plugin CPU cost.
+- Device connect/disconnect events.
+- Route changes.
+- Feedback blocks.
+- Screen reader bus changes.
+- Smart Buffer actions.
+
+Diagnostics must not disrupt audio.
+
+## Success Criteria
+
+The engine supports 68 inputs, 68 outputs, audio class routing, protected accessibility buses, Smart Buffer, Smart I/O, basic plug-in rack hooks, ASIO transport, WASAPI capture, monitoring, recording, and diagnostics while maintaining real-time safety.
+
+
+
+================================================================================
+
+Volume 03 ASIO Driver
+
+================================================================================
+
+
+# Volume 03 - ASIO Driver, Virtual Device, WASAPI Capture, Clock Domains, Shared Memory, and Feedback Prevention Architecture
+
+## Purpose
+
+This volume defines the low-level transport architecture for the Windows ASIO Router.
+
+The virtual ASIO layer exposes 68 inputs and 68 outputs to DAWs and compatible applications while the external Audio Engine performs routing, policy, and processing.
+
+## ASIO Driver Role
+
+The ASIO driver exposes virtual channels to ASIO hosts such as REAPER, Cubase, Studio One, Ableton Live, OBS ASIO plug-ins, and ASIO-capable builds of other software.
+
+The driver should not perform complex routing or UI functions.
+
+It should:
+
+- Register with ASIO hosts.
+- Report driver name and version.
+- Report channel count.
+- Report channel names.
+- Report buffer sizes.
+- Report sample rates.
+- Exchange audio buffers.
+- Report latency.
+- Communicate with the Audio Engine.
+
+It should not:
+
+- Scan plug-ins.
+- Save user settings.
+- Render UI.
+- Call cloud services.
+- Apply license policy on the callback.
+- Run screen reader logic.
+
+## Channel Layout
+
+Inputs: 68 channels.
+
+Outputs: 68 channels.
+
+Default interpretation:
+
+- 1/2: Main Out / protected main monitor.
+- 3/4: Application Pair 1.
+- 5/6: Application Pair 2.
+- 7/8: Primary Microphone.
+- 9/10: Secondary Microphone.
+- 11/12: VoiceLink or communications source.
+- 13/14: Discord or secondary communications.
+- 15/16: Browser media.
+- 17/18: System audio.
+- 19/20: Recording bus.
+- 21-60: Dynamic app/device/production pairs.
+- 61/62: Screen Reader Bus.
+- 63/64: TTS Bus.
+- 65/66: Communications Bus.
+- 67/68: Emergency Accessibility Bus.
+
+Users may rename and reassign pairs, but default privacy rules must remain intact.
+
+## Main Output Protection
+
+Outputs 1/2 are special.
+
+Rules:
+
+- Do not automatically self-loop input 1/2 to output 1/2.
+- Do not route captured Main Out back into itself.
+- Do not monitor app captures into the same endpoint they came from unless the user explicitly allows it.
+- Emergency mute must always be able to mute Main Out.
+
+## Shared Memory Transport
+
+The driver and engine should exchange real-time audio through shared memory.
+
+Suggested regions:
+
+- Audio buffers.
+- Control messages.
+- Telemetry.
+- Driver status.
+- Engine heartbeat.
+
+The UI must not be in the audio buffer path.
+
+## Buffer Flow
+
+ASIO Host -> ASIO Driver -> Shared Memory -> Audio Engine -> Routing Graph -> Shared Memory -> ASIO Driver -> ASIO Host.
+
+## Clock Domains
+
+The system may involve multiple clocks:
+
+- ASIO device clock.
+- WASAPI shared-mode clock.
+- USB audio interface clock.
+- Bluetooth device clock.
+- VoiceLink stream clock.
+- Future network audio clock.
+
+Only one master clock should be selected.
+
+Priority:
+
+1. ASIO clock.
+2. Professional USB audio interface.
+3. WASAPI exclusive mode device.
+4. WASAPI shared device.
+5. Virtual/software clock.
+
+All other sources must adapt.
+
+## Drift Correction
+
+WASAPI and ASIO streams may drift over time.
+
+The engine must monitor expected frames vs actual frames and apply small resampling adjustments. It must avoid sudden drops or insertions unless recovery is required.
+
+## WASAPI App Capture
+
+The WASAPI Capture Manager detects audio sessions and routes per-application audio.
+
+Track:
+
+- Process ID.
+- Process name.
+- Executable path.
+- Display name.
+- Endpoint ID.
+- Session state.
+- Preferred route.
+- Audio class.
+- Privacy policy.
+
+Example:
+
+Chrome starts -> detected as Program Audio -> assigned to 3/4.
+
+NVDA starts -> detected or user-classified as Screen Reader Audio -> assigned to Screen Reader Bus 61/62 -> output to user-selected headphones by default.
+
+## App Route Persistence
+
+Store per app:
+
+- Friendly name.
+- Executable path.
+- Process name.
+- Input pair.
+- Output pair.
+- Audio class.
+- Gain.
+- Mute.
+- Monitor.
+- Lock route.
+- Include in recording.
+- Include in stream.
+
+## Feedback Prevention
+
+Feedback prevention must exist below the UI level.
+
+Before enabling any route, validate:
+
+- Source endpoint.
+- Destination endpoint.
+- Graph loop risk.
+- Monitor loop risk.
+- Capture loop risk.
+- Main Out loop risk.
+- Accessibility privacy risk.
+
+If unsafe, block and announce.
+
+Example:
+
+"Route blocked. Chrome capture would feed back into Main Out."
+
+## Emergency Mute
+
+Global command:
+
+Ctrl+Shift+M.
+
+Behavior:
+
+- Mute all outputs.
+- Preserve routes.
+- Preserve settings.
+- Keep emergency accessibility messages available if possible.
+- Log the event.
+
+## Failure Recovery
+
+If the ASIO host crashes, the engine continues.
+
+If the UI crashes, the engine continues.
+
+If the engine disconnects, the driver outputs safe silence.
+
+If a device disconnects, routes pause and restore when the device returns.
+
+## Success Criteria
+
+The driver exposes 68 inputs and 68 outputs, communicates with the Audio Engine safely, protects Main Out, supports app capture routing, maintains clock discipline, prevents common feedback loops, and supports protected accessibility buses.
+
+
+
+================================================================================
+
+Volume 04 Plugin Hosting
+
+================================================================================
+
+
+# Volume 04 - CLAP/VST3 Hosting Architecture, Crash Isolation, Accessibility Wrappers, Preset Serialization, and Plugin Management
+
+## Purpose
+
+Plug-in hosting transforms ASIO Audio Router from a virtual router into a creator production platform.
+
+Users need EQ, compression, limiting, restoration, meters, loudness tools, and creative effects on microphones, applications, VoiceLink sources, TCast playback, OBS feeds, recording buses, and monitor buses.
+
+## Supported Formats
+
+Priority:
+
+1. CLAP.
+2. VST3.
+3. VST2 only if licensing permits.
+
+CLAP is preferred because it is modern and open. VST3 is required for broad compatibility. VST2 is optional and should not block the core product.
+
+## Plugin Discovery
+
+Default scan paths:
+
+CLAP:
+
+- C:\Program Files\Common Files\CLAP
+- C:\Program Files\CLAP
+- %LOCALAPPDATA%\Programs\CLAP
+
+VST3:
+
+- C:\Program Files\Common Files\VST3
+- C:\Program Files\VST3
+
+Users may add custom paths.
+
+## Plugin Database
+
+Store:
+
+- Plugin ID.
+- Name.
+- Manufacturer.
+- Version.
+- Format.
+- File path.
+- Category.
+- Input count.
+- Output count.
+- Latency samples.
+- Last scan status.
+- Crash count.
+- Favorite flag.
+- Accessibility rating.
+- Parameter metadata.
+
+## Plugin Validation
+
+On scan:
+
+- Verify file exists.
+- Verify format.
+- Load in a safe validation context.
+- Query name and parameters.
+- Query latency.
+- Unload.
+- Cache metadata.
+
+If validation fails, mark failed and continue. One bad plug-in must not stop the entire scan.
+
+## Crash Isolation
+
+Plug-ins are untrusted.
+
+The preferred design is out-of-process plug-in hosting or a sandbox layer. If a plug-in crashes, the audio engine should bypass the plug-in, preserve routes, report the issue, and continue audio.
+
+User message:
+
+"Plugin TDR Nova crashed and has been bypassed."
+
+## Rack Architecture
+
+Each route, channel pair, bus, or output may have a rack.
+
+A rack supports up to 12 slots.
+
+Each slot supports:
+
+- Load.
+- Remove.
+- Bypass.
+- Move up.
+- Move down.
+- Duplicate.
+- Open accessible parameters.
+- Save slot preset.
+
+Processing order is top to bottom.
+
+## Rack Types
+
+- Channel Rack.
+- Stereo Pair Rack.
+- Bus Rack.
+- Monitor Rack.
+- Recording Rack.
+- Broadcast Rack.
+- Accessibility Bus Rack.
+- TTS Bus Rack.
+
+By default, screen reader and emergency accessibility buses should avoid heavy processing that may delay critical messages.
+
+## Accessible Parameter Layer
+
+Most plug-in GUIs are not accessible. Therefore, the host must expose parameters through its own accessible control panel.
+
+Every parameter should provide:
+
+- Name.
+- Current value.
+- Units.
+- Minimum.
+- Maximum.
+- Default.
+- Automation support.
+- Group/category if available.
+
+Keyboard controls:
+
+- Arrow: adjust.
+- Ctrl+Arrow: fine adjust.
+- Shift+Arrow: coarse adjust.
+- Home: minimum.
+- End: maximum.
+- Enter: edit numeric value.
+- F1: help.
+
+## Preset Serialization
+
+Save:
+
+- Rack name.
+- Rack version.
+- Slot order.
+- Plugin IDs.
+- Plugin paths.
+- Parameter values.
+- Bypass states.
+- Wet/dry mix if supported.
+- Latency metadata.
+- Target bus/route.
+- Audio class compatibility.
+
+Presets must be versioned and migratable.
+
+## Accessibility Rules
+
+Do not require opening the vendor GUI.
+
+Do not rely on visual meters.
+
+Do not expose unlabeled parameters.
+
+If a parameter name is missing, create a safe fallback such as "Parameter 12" and include plugin name context.
+
+## Example Racks
+
+Broadcast Mic Rack:
+
+- Noise Gate.
+- EQ.
+- Compressor.
+- De-Esser.
+- Limiter.
+
+TCast Playback Rack:
+
+- EQ.
+- Loudness Processor.
+- Limiter.
+
+VoiceLink Room Rack:
+
+- High-pass filter.
+- Compressor.
+- Limiter.
+
+## Success Criteria
+
+The plug-in system scans CLAP/VST3 plug-ins, loads them safely, exposes accessible parameter controls, supports 12-slot racks, serializes presets, survives crashes, and never compromises real-time audio stability.
+
+
+
+================================================================================
+
+Volume 05 Accessibility Framework
+
+================================================================================
+
+
+# Volume 05 - Accessibility Framework, Screen Reader Interaction Models, Speech Feedback Systems, and Keyboard Navigation
+
+## Purpose
+
+Accessibility is the central differentiator of ASIO Audio Router. This volume defines how blind, low-vision, keyboard-only, and power users operate the system.
+
+## Supported Screen Readers
+
+Primary:
+
+- NVDA.
+- JAWS.
+- Narrator.
+
+Future:
+
+- VoiceOver.
+- Orca.
+
+## UI Technology
+
+The primary UI should use wxPython because it can work well with NVDA through accessible Python output and standard Windows accessibility behavior.
+
+The UI must prefer standard controls:
+
+- Buttons.
+- Checkboxes.
+- Combo boxes.
+- Sliders.
+- List views.
+- Tree views.
+- Menus.
+- Dialogs.
+- Notebooks/tabs.
+
+Avoid custom owner-drawn controls unless they expose proper accessible roles, names, states, focus, and keyboard behavior.
+
+## Accessibility Event Bus
+
+The audio engine emits events to an accessibility event queue. The Accessibility Service converts events into status text and optional speech.
+
+Event priorities:
+
+1. Critical.
+2. Warning.
+3. Status.
+4. Verbose.
+5. Diagnostic.
+
+Critical examples:
+
+- Feedback detected.
+- Engine stopped.
+- Device disconnected.
+- Emergency mute activated.
+
+## Speech Modes
+
+- Silent.
+- Basic.
+- Standard.
+- Verbose.
+- Developer.
+
+Standard should be the default.
+
+## Command Palette
+
+Global command palette:
+
+Ctrl+Shift+P.
+
+Examples:
+
+- route Chrome to 3/4.
+- mute Main Out.
+- load VoiceLink preset.
+- route NVDA to headphones.
+- enable Smart Buffer.
+- open Smart I/O settings.
+- export diagnostics.
+
+## Screen Reader Bus Controls
+
+Settings must include:
+
+Screen Reader Bus:
+
+- Output destination.
+- Include in recording checkbox.
+- Include in stream checkbox.
+- Volume.
+- Mute.
+- Test speech.
+- Route lock.
+
+Default:
+
+- Output: user-selected accessibility/headphone device.
+- Include in recording: off.
+- Include in stream: off.
+
+## TTS Bus Controls
+
+TTS Bus:
+
+- Output destination.
+- Include in recording.
+- Include in stream.
+- Volume.
+- Mute.
+- Source list.
+- Route lock.
+
+Default:
+
+- Output: headphones or selected accessibility device.
+- Include in recording: off.
+- Include in stream: off.
+
+## Meter Accessibility
+
+Every meter must have text equivalents.
+
+Examples:
+
+- "Mic peak minus 12 dB."
+- "Main output clipping."
+- "Chrome silent."
+- "VoiceLink near clip."
+
+Meter announcement modes:
+
+- Off.
+- Manual query.
+- Threshold based.
+- Periodic.
+- Developer.
+
+Recommended default: threshold based.
+
+## Keyboard Navigation
+
+Required:
+
+- Tab and Shift+Tab navigate controls.
+- Arrow keys adjust values.
+- Enter activates.
+- Space toggles.
+- Escape cancels.
+- Ctrl+S saves.
+- F1 opens context help.
+- Ctrl+Shift+M emergency mute.
+
+## Status Console
+
+The app must include an accessible status console.
+
+It should be searchable, copyable, exportable, and readable with screen readers.
+
+Example entries:
+
+- 10:31 Chrome routed to 3/4.
+- 10:32 Screen Reader Bus routed to Headphones.
+- 10:35 Plugin compressor inserted.
+- 10:38 Smart Buffer increased to 256 samples.
+
+## Accessibility Profiles
+
+Profiles:
+
+- Default.
+- NVDA optimized.
+- JAWS optimized.
+- Narrator optimized.
+- Minimal speech.
+- Verbose speech.
+- Developer speech.
+
+## Success Criteria
+
+A blind user can install, configure, route, monitor, record, stream, load plugins, save presets, recover from errors, and diagnose problems without sighted assistance.
+
+
+
+================================================================================
+
+Volume 06 Projects Presets Scenes
+
+================================================================================
+
+
+# Volume 06 - Projects, Presets, Scenes, Rack Serialization, Macro Actions, and Workflow Automation
+
+## Purpose
+
+Users should not rebuild studios manually every session. ASIO Audio Router must remember complete workflows through projects, presets, scenes, macros, and templates.
+
+## Preset Levels
+
+1. Plugin Preset.
+2. Rack Preset.
+3. Route Preset.
+4. Scene Preset.
+5. Project Preset.
+6. Accessibility Preset.
+7. Device Profile Preset.
+
+## Project File
+
+Suggested extension:
+
+.aarproject
+
+Project stores:
+
+- Routes.
+- Devices.
+- Smart I/O profiles.
+- Smart Buffer profile.
+- Plugin racks.
+- Scenes.
+- Macros.
+- Accessibility bus settings.
+- Screen reader and TTS routing.
+- OBS setup.
+- VoiceLink hooks.
+- TCast hooks.
+
+## Scenes
+
+A scene is a snapshot of a production state.
+
+Examples:
+
+- Podcast Recording.
+- OBS Stream.
+- VoiceLink Host.
+- TCast Production.
+- Blind Creator Mode.
+- Emergency Safe Mode.
+
+## Macros
+
+Macros automate multi-step workflows.
+
+Example: Prepare VoiceLink.
+
+- Load VoiceLink scene.
+- Route communications to 65/66.
+- Route screen reader to headphones.
+- Route TTS to headphones.
+- Enable recording bus.
+- Load host mic rack.
+- Announce ready.
+
+## Undo and History
+
+Minimum undo target: 50 actions.
+
+Undo should support:
+
+- Route changes.
+- Plugin insertion/removal.
+- Preset loading.
+- Scene switching.
+- Device profile edits.
+
+## Auto Save
+
+Default every 5 minutes.
+
+Options:
+
+- 1 minute.
+- 5 minutes.
+- 10 minutes.
+- 30 minutes.
+- Manual only.
+
+## Crash Recovery
+
+On restart, offer:
+
+- Restore last stable session.
+- Open safe mode.
+- Load default routing.
+- Export diagnostics.
+
+## Export and Import
+
+Export:
+
+- Project.
+- Rack.
+- Preset.
+- Scene.
+- Device profile.
+- Accessibility profile.
+- Diagnostics bundle.
+
+## Success Criteria
+
+Users can save, restore, export, import, automate, and recover production environments without manually rebuilding routes.
+
+
+
+================================================================================
+
+Volume 07 Smart Buffer
+
+================================================================================
+
+
+# Volume 07 - Smart Buffer Mathematical Models, DSP Scheduling, CPU Load Balancing, and Real-Time Optimization
+
+## Purpose
+
+Smart Buffer automatically balances latency and stability.
+
+Most users do not want to manually decide between 64, 128, 256, 512, or 1024 samples. The system should observe real-time conditions and protect audio.
+
+## States
+
+- Stable.
+- Monitoring.
+- Warning.
+- Recovery.
+- Protected.
+- Manual Lock.
+
+## Metrics
+
+Track:
+
+- Audio callback time.
+- Peak callback time.
+- Average callback time.
+- CPU load.
+- Plugin processing time.
+- WASAPI drift.
+- Underruns.
+- Overruns.
+- Missed deadlines.
+- Device health.
+- Capture queue depth.
+
+## Buffer Actions
+
+If instability occurs:
+
+- Increase buffer one step at a safe boundary.
+
+If sustained stability occurs:
+
+- Decrease one step only if profile allows.
+
+Never change buffer size directly inside the audio callback.
+
+## Profiles
+
+- Ultra Low Latency.
+- Balanced.
+- Streaming.
+- Broadcast.
+- Recording.
+- Safe Mode.
+- Manual Lock.
+
+Recommended defaults:
+
+- VoiceLink: Balanced.
+- TCast: Balanced.
+- OBS streaming: Broadcast.
+- Podcast recording: Recording.
+- Screen reader bus: prioritize reliability.
+
+## User Controls
+
+Settings:
+
+- Smart Buffer toggle.
+- Mode.
+- Target latency.
+- Minimum buffer.
+- Maximum buffer.
+- Recovery speed.
+- Plugin safety mode.
+- Drift correction.
+- Report mode.
+
+## Announcements
+
+Examples:
+
+- "Smart Buffer increased to 256 samples due to underrun."
+- "Audio stable. Buffer reduced to 128 samples."
+- "Manual buffer lock enabled."
+
+## Success Criteria
+
+Smart Buffer prevents glitches, protects live streams, adapts to plugin load, manages drift, and remains understandable through accessible status messages.
+
+
+
+================================================================================
+
+Volume 08 Smart IO
+
+================================================================================
+
+
+# Volume 08 - Smart I/O Detection, Device Profiles, Default Routing, Accessibility Devices, and Automatic Recovery
+
+## Purpose
+
+Smart I/O makes audio device management sane.
+
+When users connect microphones, interfaces, headsets, virtual devices, or accessibility devices, the system should detect, classify, profile, and restore them.
+
+## Device Classes
+
+- Microphone.
+- Headphones.
+- Speakers.
+- Audio Interface.
+- Mixer.
+- Virtual Device.
+- Accessibility Device.
+- Broadcast Device.
+- Unknown.
+
+## Device Events
+
+- Connected.
+- Removed.
+- Renamed.
+- Driver changed.
+- Sample rate changed.
+- Clock changed.
+- Channel count changed.
+- Health degraded.
+
+## Device Profile
+
+Store:
+
+- Device ID.
+- Friendly name.
+- User label.
+- Input names.
+- Output names.
+- Default role.
+- Sample rate.
+- Buffer.
+- Accessibility routing.
+- TTS routing.
+- Monitor routing.
+- Recording routing.
+- Fallback device.
+
+## Default Devices
+
+User can choose:
+
+- Preferred input.
+- Preferred output.
+- Preferred monitor.
+- Preferred recording device.
+- Preferred screen reader output.
+- Preferred TTS output.
+- Preferred communications output.
+- Emergency accessibility output.
+
+## Smart Device Wizard
+
+When a new device appears, ask:
+
+"What is this device?"
+
+Choices:
+
+- Microphone.
+- Headphones.
+- Speakers.
+- Audio Interface.
+- Mixer.
+- Virtual Device.
+- Accessibility Device.
+- Broadcast Device.
+- Not sure.
+
+Then ask for role and labels.
+
+## Example
+
+USB headset connected.
+
+Classified as:
+
+- Microphone input.
+- Headphone output.
+- Possible accessibility output.
+
+User chooses:
+
+- Use headphones for screen reader and TTS.
+- Do not include screen reader in stream.
+
+Stored forever.
+
+## Recovery
+
+When a device disconnects:
+
+- Pause affected routes.
+- Use fallback if configured.
+- Announce.
+- Restore when device returns.
+
+## Success Criteria
+
+Users can connect devices, choose defaults, rename channels, route screen reader/TTS independently, and recover automatically when hardware changes.
+
+
+
+================================================================================
+
+Volume 09 OBS Integration
+
+================================================================================
+
+
+# Volume 09 - OBS Integration, Multi-Track Recording, Broadcast Buses, Stream Mixes, and Creator Workflows
+
+## Purpose
+
+OBS is a primary target workflow for ASIO Audio Router.
+
+The goal is to replace "Desktop Audio plus Mic" with clean, independent, multi-track routing.
+
+## OBS Routing Model
+
+Example:
+
+- 1/2: Main monitor.
+- 3/4: Chrome.
+- 5/6: VoiceLink or communications.
+- 7/8: Microphone.
+- 21/22: TCast.
+- 61/62: Screen Reader Bus, excluded by default.
+- 63/64: TTS Bus, excluded by default.
+- 65/66: Stream Mix.
+- 67/68: Emergency Accessibility Bus.
+
+## Default Privacy
+
+Screen reader and TTS buses are not included in OBS output unless explicitly enabled.
+
+## Stream Mix
+
+The Stream Mix is separate from Monitor Mix and Recording Mix.
+
+A user may hear screen reader audio locally while OBS does not receive it.
+
+## Multi-Track Recording
+
+OBS can receive separate stems:
+
+- Mic.
+- Chrome.
+- VoiceLink.
+- TCast.
+- Music.
+- Program Mix.
+- Broadcast Mix.
+- Recording Mix.
+
+## Scene Automation
+
+Future hooks:
+
+OBS scene changed -> ASIO Router scene changed.
+
+Examples:
+
+- Starting Soon: mute mic, music to stream.
+- Live: enable mic and communications.
+- Interview: enable VoiceLink routes.
+- Ending: disable recording and fade music.
+
+## Accessibility
+
+All OBS integration settings must be available through the wxPython UI, command palette, and text manual.
+
+## Success Criteria
+
+A user can stream and record separate tracks, exclude private accessibility audio, route apps independently, and recover from routing errors without VoiceMeeter.
+
+
+
+================================================================================
+
+Volume 10 VoiceLink TCast Hooks
+
+================================================================================
+
+
+# Volume 10 - VoiceLink and TCast Integration Hooks
+
+## Purpose
+
+ASIO Audio Router is focused on the driver and routing platform first. VoiceLink and TCast integrations are hooks for later, not first-release blockers.
+
+## VoiceLink Hook Goals
+
+Future VoiceLink integration should allow:
+
+- Room mix routing.
+- Participant routing.
+- Background media routing.
+- Recording bus routing.
+- Monitoring bus routing.
+- TTS/assistant routing.
+- Accessibility notifications routing.
+
+VoiceLink communications should normally use the Communications Bus 65/66 unless user config overrides it.
+
+## VoiceLink Example
+
+Host mic -> 7/8.
+Guest 1 -> 9/10.
+Guest 2 -> 11/12.
+Room mix -> Communications Bus.
+Screen reader -> 61/62 headphones only.
+TTS assistant -> 63/64 headphones only.
+
+## TCast Hook Goals
+
+TCast may evolve from a podcast player into a production and publishing backend.
+
+Future TCast integration should allow:
+
+- Main playback route.
+- Preview route.
+- Chapter route.
+- Crossfade route.
+- Recording bus route.
+- Publishing/export metadata.
+- VoiceLink-to-TCast episode creation.
+
+## TCast Backend Note
+
+TCast backend may need upgrades to support production features instead of only playback.
+
+Possible additions:
+
+- User accounts.
+- Subscriptions.
+- Bookmarks.
+- Recommendations.
+- Publishing.
+- Creator analytics.
+- Cross-device sync.
+- VoiceLink integration.
+- Chapter metadata.
+- Transcript storage.
+
+## TCast Example
+
+TCast playback -> 21/22.
+TCast preview -> 23/24.
+Host mic -> 7/8.
+OBS stream mix -> 65/66.
+Screen reader -> headphones only.
+
+## Success Criteria
+
+The ASIO Router core remains independent while reserving clean integration points for future VoiceLink and TCast workflows.
+
+
+
+================================================================================
+
+Volume 11 Security Privacy
+
+================================================================================
+
+
+# Volume 11 - Security Architecture, Privacy Framework, Permissions Model, and Trust Boundaries
+
+## Purpose
+
+Audio routing software can accidentally expose private audio. This volume defines privacy and security rules.
+
+## Trust Zones
+
+1. Audio Engine: highest trust.
+2. Routing Service: high trust.
+3. UI: controlled trust.
+4. Plugin Host: medium/untrusted.
+5. Cloud/Marketplace: restricted.
+6. User imported presets: untrusted until validated.
+
+## Screen Reader Privacy
+
+Screen reader audio must not automatically enter:
+
+- Streams.
+- Recordings.
+- Broadcast buses.
+- VoiceLink sends.
+- TCast publishing outputs.
+
+User must explicitly opt in.
+
+## TTS Privacy
+
+TTS may contain private assistant responses. It must not enter public outputs unless explicitly routed.
+
+## Plugin Security
+
+Plugins are untrusted.
+
+Prefer sandboxing or out-of-process hosting. A plugin crash must not crash the engine.
+
+## Credentials
+
+Encrypt:
+
+- VoiceLink tokens.
+- TCast tokens.
+- WHMCS tokens.
+- API keys.
+- Cloud sync tokens.
+- Marketplace credentials.
+
+## Project Export Privacy
+
+Projects should be exportable without secrets.
+
+Export options:
+
+- Include credentials: never by default.
+- Include private device IDs: optional.
+- Include diagnostics: optional.
+- Include audio: never unless explicitly exporting recordings.
+
+## Safe Mode
+
+Safe Mode disables:
+
+- Plugins.
+- Automation.
+- Marketplace content.
+- Cloud sync.
+- Nonessential routing.
+
+Safe Mode keeps:
+
+- Core routing.
+- Accessibility output.
+- Emergency mute.
+- Diagnostics.
+- Device selection.
+
+## Success Criteria
+
+The system protects private audio, credentials, accessibility traffic, and projects while allowing intentional advanced routing.
+
+
+
+================================================================================
+
+Volume 12 API Codex Roadmap
+
+================================================================================
+
+
+# Volume 12 - API Architecture, Codex Roadmap, Repository Structure, Testing Bible, and Future Extensions
+
+## Purpose
+
+This volume defines how other tools and Codex interact with the project.
+
+## API Philosophy
+
+VoiceLink, TCast, OBS helpers, OpenClaw, and future tools should use APIs, not simulated keyboard presses or UI scraping.
+
+## API Categories
+
+- Routes.
+- Devices.
+- Projects.
+- Presets.
+- Accessibility buses.
+- Smart Buffer.
+- Smart I/O.
+- Diagnostics.
+
+## Accessibility API Examples
+
+GET /api/accessibility/buses
+
+GET /api/accessibility/routes
+
+POST /api/accessibility/screenreader/output
+
+POST /api/accessibility/tts/output
+
+POST /api/accessibility/emergency/mute
+
+## Device API Examples
+
+GET /api/devices
+
+POST /api/devices/defaults
+
+POST /api/devices/profiles
+
+POST /api/devices/classify
+
+## Codex Repository Layout
+
+Required folders:
+
+- docs/design-bible
+- docs/architecture
+- docs/accessibility
+- docs/integrations
+- docs/testing
+- docs/api
+- docs/future
+- docs/decisions
+- docs/codex_tasks
+- schemas
+- examples
+- presets
+- manual
+
+## Codex Rules
+
+Codex must:
+
+- Work in small commits.
+- Keep accessibility intact.
+- Avoid real-time unsafe code.
+- Avoid blocking the audio callback.
+- Update docs when changing architecture.
+- Add tests when adding features.
+
+## Implementation Phases
+
+1. Repository foundation.
+2. wxPython UI shell.
+3. C++ engine stub.
+4. IPC ping.
+5. Config loader.
+6. 68x68 channel model.
+7. Audio class model.
+8. Screen Reader Bus.
+9. TTS Bus.
+10. Smart I/O profiles.
+11. Smart Buffer telemetry.
+12. ASIO driver skeleton.
+13. WASAPI app detection.
+14. Routing graph.
+15. Feedback validator.
+16. Plugin metadata model.
+17. Rack model.
+18. Preset model.
+19. OBS workflow preset.
+20. Diagnostics export.
+
+## Testing Bible
+
+Test:
+
+- NVDA.
+- JAWS.
+- Narrator.
+- Keyboard only.
+- 44.1k, 48k, 96k.
+- 64, 128, 256, 512, 1024 sample buffers.
+- Device disconnect/reconnect.
+- Plug-in crash.
+- Route feedback attempts.
+- OBS multitrack.
+- Screen reader privacy.
+
+## Success Criteria
+
+The repository becomes a permanent memory source for Codex and future developers.

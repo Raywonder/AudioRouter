@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ASIO Router Device Profiles",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer"
+    },
+    "devices": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "version",
+    "devices"
+  ]
+}

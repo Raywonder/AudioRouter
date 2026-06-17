@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>ASIO Router README</title>
+<style>
+body { font-family: system-ui, sans-serif; line-height: 1.55; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+h1, h2 { border-bottom: 1px solid #ccc; padding-bottom: .25rem; }
+code, pre { background: #f5f5f5; padding: .2rem .3rem; }
+</style></head>
+<body>
+<h1>ASIO AUDIO ROUTER DESIGN BIBLE V1.0</h1><h1>Purpose:</h1><p>Accessible-first professional Windows audio routing platform.</p><h1>Current focus:</h1><p>ASIO Router core, 68 inputs, 68 outputs, accessible wxPython control panel, native C++ audio engine, protected screen reader bus, TTS bus, Smart Buffer, Smart I/O, ASIO driver, WASAPI capture, OBS workflows, and future hooks for VoiceLink and TCast.</p><h1>Top reading files:</h1><p>- ASIO_Router_Design_Bible.txt</p><p>- ASIO_Router_Design_Bible.htm</p><h1>Codex source files:</h1><p>- docs/design-bible</p><p>- docs/architecture</p><p>- docs/accessibility</p><p>- docs/integrations</p><p>- docs/testing</p><p>- docs/api</p><p>- docs/decisions</p><p>- docs/codex_tasks</p><h1>Important rules:</h1><p>- Screen reader audio is protected and excluded from recordings/streams by default.</p><p>- TTS audio is separate from screen reader audio.</p><p>- Outputs 1/2 are Main Out and protected.</p><p>- 61/62 are reserved by default for Screen Reader Bus.</p><p>- 63/64 are reserved by default for TTS Bus.</p><p>- 65/66 are reserved by default for Communications Bus.</p><p>- 67/68 are reserved by default for Emergency Accessibility Bus.</p>
+</body></html>

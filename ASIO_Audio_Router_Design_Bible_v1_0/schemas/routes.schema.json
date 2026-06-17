@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ASIO Router Routes",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer"
+    },
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "version",
+    "routes"
+  ]
+}

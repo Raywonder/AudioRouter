@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Accessibility Bus Settings",
+  "type": "object",
+  "properties": {
+    "screen_reader_bus": {
+      "type": "object"
+    },
+    "tts_bus": {
+      "type": "object"
+    },
+    "emergency_bus": {
+      "type": "object"
+    }
+  }
+}

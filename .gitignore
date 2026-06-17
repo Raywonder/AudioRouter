@@ -1,0 +1,15 @@
+bin/
+obj/
+build/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.tmp
+build/
+out/
+dist/
+*.user
+*.suo
+*.log

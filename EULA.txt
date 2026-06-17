@@ -1,0 +1,23 @@
+ASIOA Audio Router Release Agreement
+
+This installer contains the ASIOA managed Windows control app, route model,
+feedback-guard verification tool, and documentation.
+
+Important current limitation:
+This package does not install a native ASIO driver, kernel driver, per-application
+audio capture driver, or VST3 bridge plug-in yet. Those native components require
+additional implementation, SDK licensing review, and driver/code signing before
+they can be distributed.
+
+By installing, you agree that:
+
+1. The software is provided as-is for release evaluation and development.
+2. The current app can test and display the route model, feedback guard, channel
+   layout, buffering settings, startup settings, and accessibility surface.
+3. The current app is not a finished virtual ASIO audio device.
+4. Any future ASIO driver distribution must follow either Steinberg's GPLv3 ASIO
+   SDK path or a reviewed proprietary ASIO license path.
+5. Accessibility features are still under active development and should be tested
+   with NVDA, Narrator, and keyboard-only workflows before production use.
+
+See LICENSE.txt and THIRD_PARTY_NOTICES.md for source and dependency notices.
