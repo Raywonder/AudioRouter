@@ -66,7 +66,7 @@ The virtual ASIO driver exposes the DAW-facing channel set:
 - stable channel names
 - feedback guard metadata enforced by the router engine
 
-The driver must be signed for normal Windows distribution.
+The driver must be signed for normal Windows distribution. Installer scripts may register a packaged local DLL for development testing, but that does not make the driver a signed public release.
 
 ## VST3 And CLAP Bridge Plug-Ins
 

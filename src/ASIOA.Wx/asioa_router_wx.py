@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import subprocess
 import sys
+import threading
 import webbrowser
 import ctypes
 import winsound
@@ -17,7 +19,7 @@ import wx.html2
 
 
 APP_NAME = "ASIOA Audio Router"
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.2.3"
 CHANNEL_COUNT = 68
 
 
@@ -29,7 +31,9 @@ def app_data_dir() -> Path:
 
 
 SETTINGS_PATH = app_data_dir() / "settings.json"
+INSTALLER_DRIVER_CHOICE_PATH = app_data_dir() / "installer-driver-choice.json"
 DIAGNOSTICS_INBOX = app_data_dir() / ".diagnostics-inbox"
+SETTINGS_BACKUP_DIR = app_data_dir() / "settings-backups"
 
 
 def resource_path(*parts: str) -> Path:
@@ -69,6 +73,33 @@ SAMPLE_RATES = ["44100", "48000", "88200", "96000", "176400", "192000"]
 BUFFER_SIZES = ["16", "32", "64", "128", "256", "512", "1024", "2048"]
 LATENCY_TARGETS = ["2", "4", "6", "8", "10", "12", "16", "24", "32", "48"]
 SAFETY_MARGINS = ["0", "2", "4", "8", "12", "16", "24", "32", "48", "64"]
+DRIVER_INSTALL_OPTIONS = [
+    "Install ASIOA driver now",
+    "Ask me later",
+    "Control panel only",
+]
+PLUGIN_SCAN_INTERVAL_MS = 300000
+AUTOSAVE_DELAY_MS = 3000
+
+
+@dataclass(slots=True)
+class PluginInventory:
+    vst3: int = 0
+    clap: int = 0
+    vst2: int = 0
+    scanned_paths: int = 0
+    last_scan: str = "Not scanned yet"
+    scanning: bool = False
+
+    def status_lines(self) -> list[str]:
+        state = "Scanning now" if self.scanning else f"Last scan: {self.last_scan}"
+        return [
+            state,
+            f"VST3 plug-ins found: {self.vst3}.",
+            f"CLAP plug-ins found: {self.clap}.",
+            f"Legacy VST2 plug-ins found: {self.vst2}.",
+            f"Plug-in folders checked: {self.scanned_paths}.",
+        ]
 
 
 @dataclass(slots=True)
@@ -78,6 +109,7 @@ class Endpoint:
     channels: str
     enabled: bool = True
     monitor: bool = False
+    solo: bool = False
     muted: bool = False
     volume: int = 100
     buffer_override: str = "Smart"
@@ -86,11 +118,12 @@ class Endpoint:
         return [
             self.name,
             self.kind,
-            self.channels,
-            "Yes" if self.enabled else "No",
-            "On" if self.monitor else "Off",
-            "Muted" if self.muted else "Not muted",
-            f"{self.volume}%",
+            f"channels {self.channels}",
+            "enabled" if self.enabled else "disabled",
+            "monitoring on" if self.monitor else "monitoring off",
+            "solo on" if self.solo else "solo off",
+            "muted" if self.muted else "not muted",
+            f"volume {self.volume} percent",
             self.buffer_override,
         ]
 
@@ -108,10 +141,10 @@ class Route:
         return [
             self.source,
             self.destination,
-            "Yes" if self.enabled else "No",
-            "Muted" if self.muted else "Not muted",
-            "On" if self.monitor else "Off",
-            f"{self.volume}%",
+            "enabled" if self.enabled else "disabled",
+            "muted" if self.muted else "not muted",
+            "monitoring on" if self.monitor else "monitoring off",
+            f"volume {self.volume} percent",
         ]
 
 
@@ -129,9 +162,9 @@ class EffectSlot:
             self.name,
             self.fmt,
             self.target,
-            "Yes" if self.enabled else "No",
-            "Bypassed" if self.bypassed else "Active",
-            f"{self.wet}%",
+            "enabled" if self.enabled else "disabled",
+            "bypassed" if self.bypassed else "active",
+            f"wet mix {self.wet} percent",
         ]
 
 
@@ -161,6 +194,8 @@ class Settings:
     auto_check_updates: bool = True
     update_channel: str = "Stable"
     update_source: str = "GitHub first, Gitea when available"
+    driver_install_option: str = "Install ASIOA driver now"
+    driver_install_prompt_dismissed: bool = False
     screen_reader_output: str = "Current default accessibility device"
     screen_reader_router_capture: bool = False
     screen_reader_include_stream: bool = False
@@ -195,17 +230,29 @@ class Settings:
     @staticmethod
     def load() -> "Settings":
         defaults = Settings.defaults()
+        if INSTALLER_DRIVER_CHOICE_PATH.exists():
+            try:
+                installer_choice = json.loads(INSTALLER_DRIVER_CHOICE_PATH.read_text(encoding="utf-8"))
+                choice = installer_choice.get("driver_install_option")
+                if choice in DRIVER_INSTALL_OPTIONS:
+                    defaults.driver_install_option = choice
+                    defaults.driver_install_prompt_dismissed = choice == "Control panel only"
+            except Exception:
+                pass
         if not SETTINGS_PATH.exists():
             return defaults
         try:
             raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
             for key, value in raw.items():
                 if key == "endpoints":
-                    defaults.endpoints = [Endpoint(**item) for item in value]
+                    endpoint_fields = Endpoint.__dataclass_fields__
+                    defaults.endpoints = [Endpoint(**{field_name: item[field_name] for field_name in endpoint_fields if field_name in item}) for item in value]
                 elif key == "routes":
-                    defaults.routes = [Route(**item) for item in value]
+                    route_fields = Route.__dataclass_fields__
+                    defaults.routes = [Route(**{field_name: item[field_name] for field_name in route_fields if field_name in item}) for item in value]
                 elif key == "effects":
-                    defaults.effects = [EffectSlot(**item) for item in value]
+                    effect_fields = EffectSlot.__dataclass_fields__
+                    defaults.effects = [EffectSlot(**{field_name: item[field_name] for field_name in effect_fields if field_name in item}) for item in value]
                 elif hasattr(defaults, key):
                     setattr(defaults, key, value)
             return defaults
@@ -221,8 +268,9 @@ class ASIOAFrame(wx.Frame):
     def __init__(self) -> None:
         super().__init__(None, title=f"{APP_NAME} {APP_VERSION}", size=(1120, 780))
         self.settings = Settings.load()
+        self.plugin_inventory = PluginInventory()
+        self._plugin_scan_running = False
         self.status_text: wx.StaticText
-        self.status_console: wx.TextCtrl
         self.overview_view: wx.html2.WebView | wx.TextCtrl
         self.notebook: wx.Notebook
         self.route_list: wx.ListCtrl
@@ -230,17 +278,32 @@ class ASIOAFrame(wx.Frame):
         self.output_list: wx.ListCtrl
         self.effects_list: wx.ListCtrl
         self.controls: dict[str, wx.Window] = {}
+        self.route_action_buttons: dict[str, wx.Button] = {}
+        self.endpoint_action_buttons: dict[int, dict[str, wx.Button]] = {}
+        self._last_overview_html = ""
+        self._settings_dirty = False
+        self._last_saved_payload = ""
+        self.status_history: list[str] = []
         self._build_menu()
         self._build_ui()
         self._bind_shortcuts()
+        self._bind_autosave_events()
+        self.autosave_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_autosave_timer, self.autosave_timer)
         self.device_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_device_timer, self.device_timer)
         self.device_timer.Start(30000)
+        self.plugin_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_plugin_timer, self.plugin_timer)
+        self.plugin_timer.Start(PLUGIN_SCAN_INTERVAL_MS)
         self.Centre()
         self.SetStatus("ASIOA control panel ready. Open the Smart Buffer tab to tune latency and stability.")
         self.update_overview()
         self.announce_startup_status()
+        wx.CallAfter(self.show_driver_install_alert_if_needed)
+        wx.CallAfter(self.start_plugin_scan)
         self.play_sound("ready")
+        self.Bind(wx.EVT_CLOSE, self.on_close)
 
     def _build_menu(self) -> None:
         menu_bar = wx.MenuBar()
@@ -276,6 +339,19 @@ class ASIOAFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _event: self.open_command_palette(), id=command_id)
         self.SetAcceleratorTable(wx.AcceleratorTable(entries))
 
+    def _bind_autosave_events(self) -> None:
+        for control in self.controls.values():
+            if isinstance(control, wx.Choice):
+                control.Bind(wx.EVT_CHOICE, lambda _event: self.mark_settings_dirty())
+            elif isinstance(control, wx.CheckBox):
+                control.Bind(wx.EVT_CHECKBOX, lambda _event: self.mark_settings_dirty())
+            elif isinstance(control, wx.Slider):
+                control.Bind(wx.EVT_SLIDER, lambda _event: self.mark_settings_dirty())
+
+    def mark_settings_dirty(self) -> None:
+        self._settings_dirty = True
+        self.autosave_timer.StartOnce(AUTOSAVE_DELAY_MS)
+
     def _build_ui(self) -> None:
         panel = wx.Panel(self)
         root = wx.BoxSizer(wx.VERTICAL)
@@ -303,31 +379,23 @@ class ASIOAFrame(wx.Frame):
         self._add_diagnostics_tab()
 
         button_row = wx.BoxSizer(wx.HORIZONTAL)
-        save = wx.Button(panel, label="Save settings")
-        apply = wx.Button(panel, label="Apply to engine")
         close = wx.Button(panel, label="Close")
-        save.Bind(wx.EVT_BUTTON, lambda _event: self.save_settings())
-        apply.Bind(wx.EVT_BUTTON, lambda _event: self.apply_to_engine())
         close.Bind(wx.EVT_BUTTON, lambda _event: self.Close())
-        for button in (save, apply, close):
-            button_row.Add(button, 0, wx.RIGHT, 8)
+        button_row.Add(close, 0, wx.RIGHT, 8)
         root.Add(button_row, 0, wx.ALL, 8)
 
         self.status_text = wx.StaticText(panel, label="")
         root.Add(self.status_text, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        console_label = wx.StaticText(panel, label="Status console:")
-        self.status_console = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_WORDWRAP)
-        self.status_console.SetName("Accessible status console")
-        self.status_console.SetMinSize((-1, 90))
-        root.Add(console_label, 0, wx.LEFT | wx.RIGHT, 8)
-        root.Add(self.status_console, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
     def _add_overview_tab(self) -> None:
         panel, sizer = self._new_tab("Overview")
         self.overview_view = wx.html2.WebView.New(panel)
         self.overview_view.SetName("ASIOA overview")
         sizer.Add(self.overview_view, 1, wx.EXPAND | wx.ALL, 6)
+        driver_button = wx.Button(panel, label="Install or repair ASIOA audio driver")
+        driver_button.SetName("Install or repair ASIOA audio driver")
+        driver_button.Bind(wx.EVT_BUTTON, lambda _event: self.install_or_repair_driver())
+        sizer.Add(driver_button, 0, wx.ALL, 6)
 
     def _add_routing_tab(self) -> None:
         panel, sizer = self._new_tab("Routing")
@@ -337,41 +405,47 @@ class ASIOAFrame(wx.Frame):
             "Configured audio routes",
         )
         sizer.Add(self.route_list, 1, wx.EXPAND | wx.ALL, 6)
+        self.route_list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda _event: self.update_route_action_labels())
+        self.route_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda _event: self.update_route_action_labels())
         buttons = wx.BoxSizer(wx.HORIZONTAL)
-        for label, handler in [
-            ("Add safe route", self.add_safe_route),
-            ("Toggle selected route mute", self.toggle_route_mute),
-            ("Volume down 5 percent", lambda _event: self.adjust_route_volume(-5)),
-            ("Volume up 5 percent", lambda _event: self.adjust_route_volume(5)),
-            ("Remove selected route", self.remove_route),
+        for key, label, handler in [
+            ("add", "Add safe route", self.add_safe_route),
+            ("mute", "Select a route to mute or unmute it", self.toggle_route_mute),
+            ("volume_down", "Select a route to lower its volume 5 percent", lambda _event: self.adjust_route_volume(-5)),
+            ("volume_up", "Select a route to raise its volume 5 percent", lambda _event: self.adjust_route_volume(5)),
+            ("remove", "Select a route to remove it", self.remove_route),
         ]:
             button = wx.Button(panel, label=label)
             button.Bind(wx.EVT_BUTTON, handler)
+            self.route_action_buttons[key] = button
             buttons.Add(button, 0, wx.RIGHT, 6)
         sizer.Add(buttons, 0, wx.ALL, 6)
         self.populate_routes()
+        self.update_route_action_labels()
 
     def _add_inputs_tab(self) -> None:
         panel, sizer = self._new_tab("Inputs")
         self.input_list = self._make_list(
             panel,
-            ["Name", "Kind", "Channels", "Enabled", "Monitoring", "Mute state", "Volume", "Buffer"],
+            ["Name", "Kind", "Channels", "Enabled", "Monitoring", "Solo state", "Mute state", "Volume", "Buffer"],
             "Input endpoints",
         )
         sizer.Add(self.input_list, 1, wx.EXPAND | wx.ALL, 6)
         self._add_endpoint_actions(panel, sizer, self.input_list)
         self.populate_endpoints()
+        self.update_endpoint_action_labels(self.input_list)
 
     def _add_outputs_tab(self) -> None:
         panel, sizer = self._new_tab("Outputs")
         self.output_list = self._make_list(
             panel,
-            ["Name", "Kind", "Channels", "Enabled", "Monitoring", "Mute state", "Volume", "Buffer"],
+            ["Name", "Kind", "Channels", "Enabled", "Monitoring", "Solo state", "Mute state", "Volume", "Buffer"],
             "Output endpoints and DAW returns",
         )
         sizer.Add(self.output_list, 1, wx.EXPAND | wx.ALL, 6)
         self._add_endpoint_actions(panel, sizer, self.output_list)
         self.populate_endpoints()
+        self.update_endpoint_action_labels(self.output_list)
 
     def _add_monitoring_tab(self) -> None:
         panel, sizer = self._new_tab("Monitoring")
@@ -402,6 +476,13 @@ class ASIOAFrame(wx.Frame):
 
     def _add_devices_tab(self) -> None:
         panel, sizer = self._new_tab("Devices")
+        self.controls["driver_install_option"] = self._add_choice(
+            panel,
+            sizer,
+            "System driver installation preference:",
+            DRIVER_INSTALL_OPTIONS,
+            self.settings.driver_install_option,
+        )
         self._add_readonly_text(
             panel,
             sizer,
@@ -560,18 +641,24 @@ class ASIOAFrame(wx.Frame):
         return control
 
     def _add_endpoint_actions(self, panel: wx.Panel, sizer: wx.BoxSizer, target: wx.ListCtrl) -> None:
+        target.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda _event: self.update_endpoint_action_labels(target))
+        target.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda _event: self.update_endpoint_action_labels(target))
         row = wx.BoxSizer(wx.HORIZONTAL)
         actions = [
-            ("Toggle selected enabled state", lambda _event: self.toggle_endpoint(target, "enabled")),
-            ("Toggle selected monitoring", lambda _event: self.toggle_endpoint(target, "monitor")),
-            ("Toggle selected mute", lambda _event: self.toggle_endpoint(target, "muted")),
-            ("Volume down 5 percent", lambda _event: self.adjust_endpoint_volume(target, -5)),
-            ("Volume up 5 percent", lambda _event: self.adjust_endpoint_volume(target, 5)),
+            ("enabled", "Select a channel to enable or disable it", lambda _event: self.toggle_endpoint(target, "enabled")),
+            ("monitor", "Select a channel to turn monitoring on or off", lambda _event: self.toggle_endpoint(target, "monitor")),
+            ("solo", "Select a channel to turn solo on or off", lambda _event: self.toggle_endpoint(target, "solo")),
+            ("muted", "Select a channel to mute or unmute it", lambda _event: self.toggle_endpoint(target, "muted")),
+            ("volume_down", "Select a channel to lower its volume 5 percent", lambda _event: self.adjust_endpoint_volume(target, -5)),
+            ("volume_up", "Select a channel to raise its volume 5 percent", lambda _event: self.adjust_endpoint_volume(target, 5)),
         ]
-        for label, handler in actions:
+        buttons: dict[str, wx.Button] = {}
+        for key, label, handler in actions:
             button = wx.Button(panel, label=label)
             button.Bind(wx.EVT_BUTTON, handler)
+            buttons[key] = button
             row.Add(button, 0, wx.RIGHT, 6)
+        self.endpoint_action_buttons[id(target)] = buttons
         sizer.Add(row, 0, wx.ALL, 6)
 
     def populate_routes(self) -> None:
@@ -607,9 +694,92 @@ class ASIOAFrame(wx.Frame):
     def selected_index(self, control: wx.ListCtrl) -> int:
         return control.GetFirstSelected()
 
+    def selected_route(self) -> Route | None:
+        index = self.selected_index(self.route_list)
+        if index < 0 or index >= len(self.settings.routes):
+            return None
+        return self.settings.routes[index]
+
+    def route_action_name(self, route: Route) -> str:
+        return f"{route.source} to {route.destination}"
+
+    def update_route_action_labels(self) -> None:
+        route = self.selected_route() if hasattr(self, "route_list") else None
+        if route is None:
+            labels = {
+                "mute": "Select a route to mute or unmute it",
+                "volume_down": "Select a route to lower its volume 5 percent",
+                "volume_up": "Select a route to raise its volume 5 percent",
+                "remove": "Select a route to remove it",
+            }
+        else:
+            name = self.route_action_name(route)
+            labels = {
+                "mute": f"{'Unmute' if route.muted else 'Mute'} {name}",
+                "volume_down": f"Lower {name} volume 5 percent",
+                "volume_up": f"Raise {name} volume 5 percent",
+                "remove": f"Remove route {name}",
+            }
+        for key, label in labels.items():
+            button = self.route_action_buttons.get(key)
+            if button:
+                button.SetLabel(label)
+
+    def endpoint_action_name(self, endpoint: Endpoint) -> str:
+        return f"{endpoint.name}, channels {endpoint.channels}"
+
+    def endpoint_summary(self, endpoint: Endpoint) -> str:
+        return (
+            f"{endpoint.name}, channels {endpoint.channels}, "
+            f"{'enabled' if endpoint.enabled else 'disabled'}, "
+            f"{'monitoring on' if endpoint.monitor else 'monitoring off'}, "
+            f"{'solo on' if endpoint.solo else 'solo off'}, "
+            f"{'muted' if endpoint.muted else 'not muted'}, "
+            f"volume {endpoint.volume} percent, "
+            f"buffer {endpoint.buffer_override}"
+        )
+
+    def route_summary(self, route: Route) -> str:
+        return (
+            f"{route.source} to {route.destination}, "
+            f"{'enabled' if route.enabled else 'disabled'}, "
+            f"{'muted' if route.muted else 'not muted'}, "
+            f"{'monitoring on' if route.monitor else 'monitoring off'}, "
+            f"volume {route.volume} percent"
+        )
+
+    def update_endpoint_action_labels(self, control: wx.ListCtrl) -> None:
+        endpoint = self.endpoint_for_row(control, self.selected_index(control))
+        buttons = self.endpoint_action_buttons.get(id(control), {})
+        if endpoint is None:
+            labels = {
+                "enabled": "Select a channel to enable or disable it",
+                "monitor": "Select a channel to turn monitoring on or off",
+                "solo": "Select a channel to turn solo on or off",
+                "muted": "Select a channel to mute or unmute it",
+                "volume_down": "Select a channel to lower its volume 5 percent",
+                "volume_up": "Select a channel to raise its volume 5 percent",
+            }
+        else:
+            name = self.endpoint_action_name(endpoint)
+            labels = {
+                "enabled": f"{'Disable' if endpoint.enabled else 'Enable'} {name}",
+                "monitor": f"{'Turn monitoring off for' if endpoint.monitor else 'Turn monitoring on for'} {name}",
+                "solo": f"{'Turn solo off for' if endpoint.solo else 'Turn solo on for'} {name}",
+                "muted": f"{'Unmute' if endpoint.muted else 'Mute'} {name}",
+                "volume_down": f"Lower {name} volume 5 percent",
+                "volume_up": f"Raise {name} volume 5 percent",
+            }
+        for key, label in labels.items():
+            button = buttons.get(key)
+            if button:
+                button.SetLabel(label)
+
     def add_safe_route(self, _event: wx.CommandEvent) -> None:
         self.settings.routes.append(Route("DAW cue return 3/4", "Capture A 1/2", volume=85))
         self.populate_routes()
+        self.update_route_action_labels()
+        self.mark_settings_dirty()
         self.SetStatus("Added safe route from DAW cue return 3 and 4 to Capture A 1 and 2.")
 
     def toggle_route_mute(self, _event: wx.CommandEvent) -> None:
@@ -620,7 +790,9 @@ class ASIOAFrame(wx.Frame):
         route = self.settings.routes[index]
         route.muted = not route.muted
         self.populate_routes()
-        self.SetStatus(f"Route mute is now {'on' if route.muted else 'off'}.")
+        self.update_route_action_labels()
+        self.mark_settings_dirty()
+        self.SetStatus(f"{self.route_action_name(route)} is now {'muted' if route.muted else 'unmuted'}.")
 
     def adjust_route_volume(self, delta: int) -> None:
         index = self.selected_index(self.route_list)
@@ -630,7 +802,9 @@ class ASIOAFrame(wx.Frame):
         route = self.settings.routes[index]
         route.volume = max(0, min(150, route.volume + delta))
         self.populate_routes()
-        self.SetStatus(f"Route volume is now {route.volume} percent.")
+        self.update_route_action_labels()
+        self.mark_settings_dirty()
+        self.SetStatus(f"{self.route_action_name(route)} volume is now {route.volume} percent.")
 
     def remove_route(self, _event: wx.CommandEvent) -> None:
         index = self.selected_index(self.route_list)
@@ -639,6 +813,8 @@ class ASIOAFrame(wx.Frame):
             return
         del self.settings.routes[index]
         self.populate_routes()
+        self.update_route_action_labels()
+        self.mark_settings_dirty()
         self.SetStatus("Route removed.")
 
     def endpoint_for_row(self, control: wx.ListCtrl, row: int) -> Endpoint | None:
@@ -654,7 +830,22 @@ class ASIOAFrame(wx.Frame):
             return
         setattr(endpoint, attr, not getattr(endpoint, attr))
         self.populate_endpoints()
-        self.SetStatus(f"{endpoint.name} {attr.replace('_', ' ')} updated.")
+        self.update_endpoint_action_labels(control)
+        self.mark_settings_dirty()
+        if attr == "muted":
+            state = "muted" if endpoint.muted else "unmuted"
+            self.SetStatus(f"{self.endpoint_action_name(endpoint)} is now {state}.")
+        elif attr == "monitor":
+            state = "on" if endpoint.monitor else "off"
+            self.SetStatus(f"Monitoring for {self.endpoint_action_name(endpoint)} is now {state}.")
+        elif attr == "solo":
+            state = "on" if endpoint.solo else "off"
+            self.SetStatus(f"Solo for {self.endpoint_action_name(endpoint)} is now {state}.")
+        elif attr == "enabled":
+            state = "enabled" if endpoint.enabled else "disabled"
+            self.SetStatus(f"{self.endpoint_action_name(endpoint)} is now {state}.")
+        else:
+            self.SetStatus(f"{endpoint.name} {attr.replace('_', ' ')} updated.")
 
     def adjust_endpoint_volume(self, control: wx.ListCtrl, delta: int) -> None:
         endpoint = self.endpoint_for_row(control, self.selected_index(control))
@@ -663,7 +854,9 @@ class ASIOAFrame(wx.Frame):
             return
         endpoint.volume = max(0, min(150, endpoint.volume + delta))
         self.populate_endpoints()
-        self.SetStatus(f"{endpoint.name} volume is now {endpoint.volume} percent.")
+        self.update_endpoint_action_labels(control)
+        self.mark_settings_dirty()
+        self.SetStatus(f"{self.endpoint_action_name(endpoint)} volume is now {endpoint.volume} percent.")
 
     def collect_settings(self) -> None:
         for key, control in self.controls.items():
@@ -674,23 +867,251 @@ class ASIOAFrame(wx.Frame):
             elif isinstance(control, wx.Slider):
                 setattr(self.settings, key, control.GetValue())
 
+    def driver_package_path(self) -> Path:
+        return resource_path("driver", "install-asioa-driver.ps1")
+
+    def is_driver_installed(self) -> bool:
+        marker = SETTINGS_PATH.parent / "driver-installed.json"
+        return marker.exists()
+
+    def driver_status_lines(self) -> list[str]:
+        package = self.driver_package_path()
+        if self.is_driver_installed():
+            install_state = "The ASIOA system audio driver is marked as installed on this computer."
+        elif package.exists():
+            install_state = "The ASIOA system audio driver package is available and ready to install."
+        else:
+            install_state = "The ASIOA control panel is installed. The signed system audio driver package is not bundled with this build yet."
+        return [
+            install_state,
+            f"Driver install preference: {self.settings.driver_install_option}.",
+            "ASIOA Native driver is the target mode for system-wide routing through ASIO, ASIO4ALL-compatible devices, and future per-application capture.",
+            "Until the signed driver is installed, miniaudio, WASAPI, PortAudio, JACK, and ASIO4ALL compatibility modes remain available for control-panel configuration and testing.",
+        ]
+
+    def show_driver_install_alert_if_needed(self) -> None:
+        if self.is_driver_installed():
+            return
+        if self.settings.driver_install_prompt_dismissed:
+            return
+        if self.settings.driver_install_option == "Control panel only":
+            return
+        message = (
+            "Audio driver installation is required before ASIOA Audio Router can be used system-wide by DAWs and ASIO-linked devices.\n\n"
+            "Choose Yes to install or repair the driver now.\n"
+            "Choose No to keep using the control panel and install the driver later from the Overview or Devices tab."
+        )
+        result = wx.MessageBox(message, "ASIOA audio driver installation", wx.YES_NO | wx.ICON_INFORMATION, self)
+        if result == wx.YES:
+            self.install_or_repair_driver()
+        else:
+            self.settings.driver_install_prompt_dismissed = True
+            self.settings.driver_install_option = "Ask me later"
+            self.settings.save()
+            self.update_overview()
+            self.SetStatus("Driver installation deferred. Use the Overview or Devices tab when you are ready.")
+
+    def install_or_repair_driver(self) -> None:
+        package = self.driver_package_path()
+        if not package.exists():
+            self.SetStatus("ASIOA system driver package is not bundled with this build yet. The control panel remains available.")
+            wx.MessageBox(
+                "The ASIOA control panel is installed, but the signed system audio driver package is not bundled with this build yet.\n\n"
+                "You can still configure routes, smart buffer behavior, effects policy, accessibility routing, and diagnostics. "
+                "When the signed driver package is included, this button will install or repair it.",
+                "ASIOA audio driver not bundled",
+                wx.OK | wx.ICON_INFORMATION,
+                self,
+            )
+            return
+        command = [
+            "powershell.exe",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(package),
+        ]
+        try:
+            subprocess.Popen(command, shell=False)
+            self.SetStatus("ASIOA driver installer launched. Follow the installer prompts and restart audio applications after it finishes.")
+            self.play_sound("notification")
+        except OSError as exc:
+            self.SetStatus(f"Could not launch ASIOA driver installer: {exc}.")
+            self.play_sound("error")
+
+    def engine_restart_required(self) -> bool:
+        restart_keys = {
+            "driver_mode",
+            "sample_rate",
+            "buffer_size",
+            "minimum_buffer",
+            "maximum_buffer",
+            "driver_install_option",
+        }
+        try:
+            saved = json.loads(SETTINGS_PATH.read_text(encoding="utf-8")) if SETTINGS_PATH.exists() else {}
+        except Exception:
+            saved = {}
+        return any(str(saved.get(key, getattr(self.settings, key, ""))) != str(getattr(self.settings, key, "")) for key in restart_keys)
+
+    def queue_engine_patch(self, section: str, restart_required: bool) -> Path:
+        queue_dir = SETTINGS_PATH.parent / "engine-patches"
+        queue_dir.mkdir(parents=True, exist_ok=True)
+        patch = {
+            "createdAt": datetime.now().isoformat(timespec="seconds"),
+            "section": section,
+            "restartRequired": restart_required,
+            "settings": asdict(self.settings),
+        }
+        path = queue_dir / f"engine-patch-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        path.write_text(json.dumps(patch, indent=2), encoding="utf-8")
+        return path
+
+    def settings_payload(self) -> str:
+        return json.dumps(asdict(self.settings), indent=2, sort_keys=True)
+
+    def backup_settings(self, payload: str) -> None:
+        SETTINGS_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        base = SETTINGS_BACKUP_DIR / f"asioa-settings-{stamp}"
+        flx = base.with_suffix(".flx")
+        flxx = base.with_suffix(".flxx")
+        flx.write_text(payload, encoding="utf-8")
+        with gzip.open(flxx, "wt", encoding="utf-8") as compressed:
+            compressed.write(payload)
+        backups = sorted(SETTINGS_BACKUP_DIR.glob("asioa-settings-*.flx"), key=lambda item: item.stat().st_mtime, reverse=True)
+        for old in backups[20:]:
+            old.unlink(missing_ok=True)
+            old.with_suffix(".flxx").unlink(missing_ok=True)
+
+    def restart_audio_engine_if_needed(self, restart_required: bool) -> None:
+        if not restart_required:
+            self.SetStatus("Settings were sent to the ASIOA engine without restarting audio.")
+            return
+        restart_script = resource_path("engine", "restart-asioa-engine.ps1")
+        if restart_script.exists():
+            subprocess.Popen(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", str(restart_script)], shell=False)
+            self.SetStatus("Settings were sent to the ASIOA engine. The audio engine restart was launched because driver or buffer settings changed.")
+            return
+        self.SetStatus("Settings were sent to the ASIOA engine. A restart is required when the native engine is running, but the restart helper is not bundled yet.")
+
     def save_settings(self) -> None:
         self.collect_settings()
+        payload = self.settings_payload()
         self.settings.save()
+        if payload != self._last_saved_payload:
+            self.backup_settings(payload)
+            self._last_saved_payload = payload
         self.update_overview()
-        self.SetStatus(f"Settings saved to {SETTINGS_PATH}.")
+        self._settings_dirty = False
+        self.SetStatus("Settings saved automatically.")
         self.play_sound("success")
 
     def apply_to_engine(self) -> None:
-        self.save_settings()
-        self.SetStatus("Settings saved and queued for the ASIOA engine. Restart the engine if the driver is already loaded by a DAW.")
+        self.collect_settings()
+        restart_required = self.engine_restart_required()
+        payload = self.settings_payload()
+        self.settings.save()
+        if payload != self._last_saved_payload:
+            self.backup_settings(payload)
+            self._last_saved_payload = payload
+        patch = self.queue_engine_patch("current-tab", restart_required)
+        self.update_overview()
+        self.restart_audio_engine_if_needed(restart_required)
+        self._settings_dirty = False
+        self.append_status_history(f"Engine patch file: {patch}")
         self.play_sound("notification")
+
+    def autosave_and_hot_apply(self) -> None:
+        if not self._settings_dirty:
+            return
+        self.apply_to_engine()
+
+    def on_autosave_timer(self, _event: wx.TimerEvent) -> None:
+        self.autosave_and_hot_apply()
+
+    def on_close(self, event: wx.CloseEvent) -> None:
+        self.autosave_and_hot_apply()
+        event.Skip()
 
     def refresh_devices(self) -> None:
         self.update_overview()
 
     def on_device_timer(self, _event: wx.TimerEvent) -> None:
         self.refresh_devices()
+
+    def on_plugin_timer(self, _event: wx.TimerEvent) -> None:
+        self.start_plugin_scan()
+
+    def plugin_search_roots(self) -> list[tuple[Path, str]]:
+        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        program_files_x86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        common_files = Path(os.environ.get("CommonProgramFiles", str(program_files / "Common Files")))
+        local_app_data = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+        roaming_app_data = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
+        return [
+            (common_files / "VST3", "vst3"),
+            (common_files / "CLAP", "clap"),
+            (program_files / "Common Files" / "VST3", "vst3"),
+            (program_files / "Common Files" / "CLAP", "clap"),
+            (program_files / "VSTPlugins", "vst2"),
+            (program_files / "Steinberg" / "VSTPlugins", "vst2"),
+            (program_files_x86 / "VSTPlugins", "vst2"),
+            (program_files_x86 / "Steinberg" / "VSTPlugins", "vst2"),
+            (local_app_data / "Programs" / "Common" / "VST3", "vst3"),
+            (local_app_data / "Programs" / "Common" / "CLAP", "clap"),
+            (roaming_app_data / "VST3", "vst3"),
+            (roaming_app_data / "CLAP", "clap"),
+        ]
+
+    def start_plugin_scan(self) -> None:
+        if self._plugin_scan_running:
+            return
+        self._plugin_scan_running = True
+        self.plugin_inventory.scanning = True
+        thread = threading.Thread(target=self.scan_plugins_worker, name="ASIOAPluginScanner", daemon=True)
+        thread.start()
+
+    def scan_plugins_worker(self) -> None:
+        counts = {"vst3": 0, "clap": 0, "vst2": 0}
+        scanned_paths = 0
+        for root, kind in self.plugin_search_roots():
+            if not root.exists():
+                continue
+            scanned_paths += 1
+            try:
+                if kind == "vst3":
+                    counts[kind] += sum(1 for _item in root.rglob("*.vst3"))
+                elif kind == "clap":
+                    counts[kind] += sum(1 for _item in root.rglob("*.clap"))
+                else:
+                    counts[kind] += sum(1 for _item in root.rglob("*.dll"))
+            except (OSError, PermissionError):
+                continue
+        wx.CallAfter(self.finish_plugin_scan, counts, scanned_paths)
+
+    def finish_plugin_scan(self, counts: dict[str, int], scanned_paths: int) -> None:
+        changed = (
+            self.plugin_inventory.last_scan == "Not scanned yet"
+            or self.plugin_inventory.vst3 != counts.get("vst3", 0)
+            or self.plugin_inventory.clap != counts.get("clap", 0)
+            or self.plugin_inventory.vst2 != counts.get("vst2", 0)
+            or self.plugin_inventory.scanned_paths != scanned_paths
+        )
+        self.plugin_inventory = PluginInventory(
+            vst3=counts.get("vst3", 0),
+            clap=counts.get("clap", 0),
+            vst2=counts.get("vst2", 0),
+            scanned_paths=scanned_paths,
+            last_scan=datetime.now().strftime("%I:%M %p").lstrip("0"),
+            scanning=False,
+        )
+        self._plugin_scan_running = False
+        if changed:
+            self.update_overview()
+            self.SetStatus(
+                f"Plug-in scan complete. Found {self.plugin_inventory.vst3} VST3, {self.plugin_inventory.clap} CLAP, and {self.plugin_inventory.vst2} legacy VST2 plug-ins."
+            )
 
     def select_tab(self, name: str) -> None:
         for index in range(self.notebook.GetPageCount()):
@@ -779,9 +1200,11 @@ class ASIOAFrame(wx.Frame):
                 f"wxPython: {wx.version()}",
                 f"Settings path: {SETTINGS_PATH}",
                 f"Configured driver mode: {self.settings.driver_mode}",
+                *self.driver_status_lines(),
                 f"Smart buffer mode: {self.settings.smart_buffer_mode}",
                 f"Sample rate: {self.settings.sample_rate}",
                 f"Starting buffer: {self.settings.buffer_size} samples",
+                *self.plugin_inventory.status_lines(),
                 f"Channel count target: {CHANNEL_COUNT} inputs and {CHANNEL_COUNT} outputs",
                 "Protected buses: screen reader 61/62, TTS 63/64, communications 65/66, emergency accessibility 67/68.",
                 "Live effects: off by default; VST3 and CLAP are preferred; VST2 is legacy and disabled by default.",
@@ -793,35 +1216,60 @@ class ASIOAFrame(wx.Frame):
         )
 
     def render_overview_html(self) -> str:
-        active_routes = "".join(f"<li>{route.source} to {route.destination}, {'muted' if route.muted else 'not muted'}, volume {route.volume}%</li>" for route in self.settings.routes)
-        endpoints = "".join(f"<li>{endpoint.name}: {'enabled' if endpoint.enabled else 'disabled'}, {endpoint.kind}, channels {endpoint.channels}</li>" for endpoint in self.settings.endpoints)
-        effects = "".join(f"<li>{effect.name}: {effect.fmt}, {'enabled' if effect.enabled else 'disabled'}, {'bypassed' if effect.bypassed else 'active'}</li>" for effect in self.settings.effects)
+        status_items = "".join(f"<li>{item}</li>" for item in self.status_history[-8:])
+        active_routes = "".join(
+            f"<li>{self.route_summary(route)}.</li>"
+            for route in self.settings.routes
+        )
+        endpoints = "".join(
+            f"<li>{self.endpoint_summary(endpoint)}.</li>"
+            for endpoint in self.settings.endpoints
+        )
+        effects = "".join(
+            f"<li><strong>{effect.name}</strong><br>Format: {effect.fmt}.<br>Status: {'enabled' if effect.enabled else 'disabled'}.<br>Processing state: {'bypassed' if effect.bypassed else 'active'}.</li>"
+            for effect in self.settings.effects
+        )
+        driver_status = "".join(f"<li>{line}</li>" for line in self.driver_status_lines())
+        plugin_status = "".join(f"<li>{line}</li>" for line in self.plugin_inventory.status_lines())
         return f"""<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <title>ASIOA Overview</title>
   <style>
-    body {{ font-family: Segoe UI, Arial, sans-serif; font-size: 14px; line-height: 1.45; color: #111; background: #fff; }}
+    body {{ font-family: Segoe UI, Arial, sans-serif; font-size: 14px; line-height: 1.55; color: #111; background: #fff; }}
     h1 {{ font-size: 1.4rem; }}
     h2 {{ font-size: 1.1rem; margin-top: 1rem; }}
-    ul {{ margin-top: .2rem; }}
+    ul {{ margin-top: .2rem; padding-left: 1.4rem; }}
+    li {{ margin-bottom: .75rem; }}
+    .status-line {{ margin: .35rem 0; }}
   </style>
 </head>
 <body>
   <h1>ASIOA Audio Router overview</h1>
-  <p>Driver mode: <strong>{self.settings.driver_mode}</strong>. Smart Buffer: <strong>{self.settings.smart_buffer_mode}</strong>, {self.settings.buffer_size} samples at {self.settings.sample_rate} Hz.</p>
-  <p>Screen reader output: <strong>{self.settings.screen_reader_output}</strong>. Direct ASIOA capture is <strong>{'on' if self.settings.screen_reader_router_capture else 'off'}</strong>.</p>
-  <p>Built-in background and action sounds are <strong>{'on' if self.settings.enable_builtin_sounds else 'off'}</strong>. Sounds use the bundled OpenLink sound set.</p>
+  <p class="status-line">Driver mode: <strong>{self.settings.driver_mode}</strong>.</p>
+  <p class="status-line">Smart Buffer mode: <strong>{self.settings.smart_buffer_mode}</strong>.</p>
+  <p class="status-line">Starting buffer: <strong>{self.settings.buffer_size} samples</strong>.</p>
+  <p class="status-line">Sample rate: <strong>{self.settings.sample_rate} Hz</strong>.</p>
+  <p class="status-line">Screen reader output: <strong>{self.settings.screen_reader_output}</strong>.</p>
+  <p class="status-line">Direct ASIOA screen reader capture: <strong>{'on' if self.settings.screen_reader_router_capture else 'off'}</strong>.</p>
+  <p class="status-line">Built-in background and action sounds: <strong>{'on' if self.settings.enable_builtin_sounds else 'off'}</strong>.</p>
+  <h2>Driver installation</h2>
+  <ul>{driver_status}</ul>
+  <h2>Recent status</h2>
+  <ul>{status_items or '<li>No status messages yet.</li>'}</ul>
   <h2>Protected buses</h2>
   <ul>
-    <li>Screen Reader Bus: channels 61 and 62. Stream inclusion is {'on' if self.settings.screen_reader_include_stream else 'off'}. Recording inclusion is {'on' if self.settings.screen_reader_include_recording else 'off'}.</li>
+    <li>Screen Reader Bus.<br>Channels: 61 and 62.<br>Stream inclusion: {'on' if self.settings.screen_reader_include_stream else 'off'}.<br>Recording inclusion: {'on' if self.settings.screen_reader_include_recording else 'off'}.</li>
     <li>TTS Bus: channels 63 and 64.</li>
     <li>Communications Bus: channels 65 and 66.</li>
     <li>Emergency Accessibility Bus: channels 67 and 68.</li>
   </ul>
   <h2>Routes</h2>
   <ul>{active_routes or '<li>No routes configured.</li>'}</ul>
+  <h2>Plug-in inventory</h2>
+  <ul>{plugin_status}</ul>
+  <p>Plug-in processing can stay disabled while ASIOA still scans installed VST3, CLAP, and legacy VST2 plug-ins in the background.</p>
   <h2>Endpoints</h2>
   <ul>{endpoints}</ul>
   <h2>Effects</h2>
@@ -838,7 +1286,11 @@ class ASIOAFrame(wx.Frame):
     def update_overview(self) -> None:
         if not hasattr(self, "overview_view"):
             return
-        self.overview_view.SetPage(self.render_overview_html(), "")
+        html = self.render_overview_html()
+        if html == self._last_overview_html:
+            return
+        self._last_overview_html = html
+        self.overview_view.SetPage(html, "")
 
     def startup_summary(self) -> str:
         route_count = len(self.settings.routes)
@@ -884,9 +1336,15 @@ class ASIOAFrame(wx.Frame):
     def SetStatus(self, message: str) -> None:  # noqa: N802 - wx-style name.
         self.status_text.SetLabel(f"Status: {message}")
         self.status_text.SetName(f"Status: {message}")
-        if hasattr(self, "status_console"):
-            timestamp = wx.DateTime.Now().FormatISOTime()
-            self.status_console.AppendText(f"{timestamp} {message}\n")
+        self.append_status_history(message)
+
+    def append_status_history(self, message: str) -> None:
+        timestamp = wx.DateTime.Now().FormatISOTime()
+        entry = f"{timestamp} {message}"
+        if not self.status_history or self.status_history[-1] != entry:
+            self.status_history.append(entry)
+            self.status_history = self.status_history[-40:]
+            self.update_overview()
 
 
 class ScreenReaderNotifier:

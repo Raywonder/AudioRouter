@@ -1,3 +1,27 @@
+# ASIOA Audio Router 0.2.3
+
+This release improves the Overview dashboard, driver-install flow, and live apply behavior.
+
+## Added
+
+- Overview tab now uses more natural line-by-line wording for driver status, buffer status, screen-reader routing, routes, endpoints, and effects.
+- Overview web view no longer refreshes when the content has not changed, preventing screen readers from being pushed back to the top during background device refresh.
+- Installer now asks how to handle the ASIOA system audio driver with three radio-button choices: install now, ask later, or control panel only.
+- Overview and Devices tabs now expose a one-time install or repair button for the ASIOA system audio driver.
+- Apply to engine now writes an engine patch file and only requests an audio engine restart when driver or buffer-critical settings changed.
+- Background plug-in scanning now counts installed VST3, CLAP, and legacy VST2 plug-ins even when live effects processing is disabled.
+- Settings now autosave and hot-apply after a short quiet delay when controls change.
+- Closing the control panel now flushes pending settings automatically.
+- Settings backups are written as readable `.flx` files and compressed `.flxx` files in the user's ASIOA settings backup folder.
+- Recent status messages now appear inside the Overview tab instead of a separate read-only status console.
+- Native ASIO driver source has been added under `src\ASIOA.Driver` with COM/ASIO registration hooks, 68 input and 68 output metadata, protected channel names, sample-rate/buffer reporting, and safe silence behavior until the engine transport is connected.
+- Driver packaging scripts now stage `ASIOA.Driver.dll` with register/unregister scripts when a native DLL is built or supplied.
+
+## Notes
+
+- This build prepares the control-panel and installer flow for the signed ASIOA system driver. If the signed driver package is not bundled, the app clearly says so and keeps the control panel available for routing, smart-buffer, accessibility, and diagnostics setup.
+- The current Windows build machine is missing MSVC headers and `vcvarsall.bat`, so local native driver compilation is blocked until the Visual Studio C++ workload is repaired. Driver staging has been verified with a supplied DLL path.
+
 # ASIOA Audio Router 0.2.2
 
 This release improves the wxPython control panel around readable status, screen-reader routing, and quiet background refresh.

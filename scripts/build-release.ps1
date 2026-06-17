@@ -50,12 +50,12 @@ if (!(Test-Path $wxAppDir)) {
 }
 
 if (Test-Path $PublishDir) {
-    Get-ChildItem $PublishDir -Force | Where-Object { $_.Name -ne "wpf-secondary" } | Remove-Item -Recurse -Force
+    Get-ChildItem $PublishDir -Force | Where-Object { $_.Name -notin @("wpf-secondary", "driver") } | Remove-Item -Recurse -Force
 }
 Copy-Item -Path (Join-Path $wxAppDir "*") -Destination $PublishDir -Recurse -Force
 & $iscc $installerScript
 
-$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.2.zip"
+$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.3.zip"
 if (Test-Path $portableZip) {
     Remove-Item -LiteralPath $portableZip -Force
 }

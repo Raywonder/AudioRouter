@@ -22,7 +22,8 @@
 - Publish stable channel names.
 - Support 44.1, 48, 88.2, 96, 176.4, and 192 kHz where practical.
 - Support configurable buffer sizes.
-- Sign and install the driver.
+- Stage built driver DLLs into the installer publish folder for local registration tests.
+- Sign the driver before public distribution.
 
 ## Phase 4: VST3 Bridge Plug-In
 
@@ -37,4 +38,3 @@
 - First-run setup wizard.
 - NVDA/Narrator test pass.
 - DAW test pass in Ableton Live, REAPER, and other ASIO/VST3 hosts.
-

@@ -4,7 +4,7 @@
 
 ASIOA Audio Router is the control application for the ASIOA routing system. It manages DAW channels, application feeds, monitoring, buffering, startup behavior, and diagnostics.
 
-The current build contains the stable routing model and accessible wxPython control surface. It does not install the native ASIO driver yet. When the driver is installed, the same controls will manage live routing.
+The current build contains the stable routing model and accessible wxPython control surface. If the installer package includes a built `ASIOA.Driver.dll`, the installer can register that packaged virtual ASIO driver for local testing. Unsigned local builds are not public signed driver releases. When the driver is installed, the same controls will manage live routing.
 
 ## Starting The App
 
