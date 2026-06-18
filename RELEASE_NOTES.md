@@ -11,6 +11,7 @@ This build is packaged for hands-on local driver testing, not only control-panel
 ## Changed
 
 - Public driver signing is still a separate requirement, but this package now includes the local registerable driver payload needed for hands-on DAW/app detection tests on this machine.
+- The installer release agreement now matches the current package contents, including the packaged native driver option and the remaining signing and production limitations.
 
 # ASIOA Audio Router 0.2.4
 

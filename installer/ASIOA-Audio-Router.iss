@@ -43,7 +43,7 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\d
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch ASIOA Audio Router"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\driver\uninstall-asioa-driver.ps1"""; Flags: runhidden skipifdoesntexist; Check: ShouldRunDriverUninstall
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\driver\uninstall-asioa-driver.ps1"""; Flags: runhidden skipifdoesntexist; Check: ShouldRunDriverUninstall; RunOnceId: "UnregisterASIOADriver"
 
 [Code]
 var
