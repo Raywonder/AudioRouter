@@ -1,3 +1,25 @@
+# ASIOA Audio Router 0.2.4
+
+This hotfix improves keyboard focus, default routing policy, monitoring-device setup, and driver-install prompting.
+
+## Added
+
+- Route, input, and output lists now remember the last focused item. If focus moves to an action button, that button still acts on the remembered list item; if no item has ever been touched, the first row is selected silently.
+- Route and endpoint action buttons now keep specific labels such as muting, unmuting, soloing, enabling, or lowering volume for the selected route or channel.
+- Default routing now includes Main output 1/2, System audio capture 1/2, a muted Primary microphone 7/8, Screen Reader Bus 61/62, TTS Bus 63/64, Communications Bus 65/66, Emergency Accessibility Bus 67/68, and Sessionwire guard endpoints.
+- Monitoring settings now include the default monitoring output device, system audio master pair, and screen-reader/TTS default pair.
+- Devices now include a Sessionwire white-noise guard setting and threshold for the audio engine policy.
+- Overview and diagnostics now show the current monitor device, master pairs, protected bus policy, and Sessionwire guard state.
+
+## Changed
+
+- The control panel no longer opens a driver-install prompt on every normal launch. Driver installation is offered during setup, and the Overview or Devices tab keeps an install or repair button available later.
+- Microphones are muted and monitoring-off by default on a fresh profile, but saved user choices are not forcibly reset on later launches.
+
+## Notes
+
+- This release updates the control-panel routing policy and packaged app metadata. Real system-wide capture, driver signing, and sample-level white-noise detection still depend on the native audio engine and signed driver path being installed and verified.
+
 # ASIOA Audio Router 0.2.3
 
 This release improves the Overview dashboard, driver-install flow, and live apply behavior.

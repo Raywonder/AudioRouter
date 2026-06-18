@@ -19,8 +19,9 @@ import wx.html2
 
 
 APP_NAME = "ASIOA Audio Router"
-APP_VERSION = "0.2.3"
+APP_VERSION = "0.2.4"
 CHANNEL_COUNT = 68
+CHANNEL_PAIRS = [f"{left}-{left + 1}" for left in range(1, CHANNEL_COUNT, 2)]
 
 
 def app_data_dir() -> Path:
@@ -113,18 +114,22 @@ class Endpoint:
     muted: bool = False
     volume: int = 100
     buffer_override: str = "Smart"
+    role: str = "General"
+    white_noise_guard: bool = False
 
     def row(self) -> list[str]:
         return [
             self.name,
             self.kind,
             f"channels {self.channels}",
+            self.role,
             "enabled" if self.enabled else "disabled",
             "monitoring on" if self.monitor else "monitoring off",
             "solo on" if self.solo else "solo off",
             "muted" if self.muted else "not muted",
             f"volume {self.volume} percent",
             self.buffer_override,
+            "white-noise guard on" if self.white_noise_guard else "white-noise guard off",
         ]
 
 
@@ -188,6 +193,7 @@ class Settings:
     vst2_enabled: bool = False
     monitor_in_app: bool = True
     bypass_to_daw: bool = False
+    monitor_volume: int = 100
     run_on_startup: bool = False
     start_minimized: bool = False
     keep_engine_active: bool = True
@@ -196,10 +202,15 @@ class Settings:
     update_source: str = "GitHub first, Gitea when available"
     driver_install_option: str = "Install ASIOA driver now"
     driver_install_prompt_dismissed: bool = False
+    default_monitor_device: str = "Main output 1/2"
+    system_audio_master_pair: str = "Main output 1/2"
+    screen_reader_master_pair: str = "Main output 1/2"
     screen_reader_output: str = "Current default accessibility device"
     screen_reader_router_capture: bool = False
     screen_reader_include_stream: bool = False
     screen_reader_include_recording: bool = False
+    sessionwire_white_noise_guard: bool = True
+    sessionwire_noise_floor_db: int = -60
     enable_builtin_sounds: bool = True
     silent_diagnostics: bool = True
     endpoints: list[Endpoint] = field(default_factory=list)
@@ -209,16 +220,24 @@ class Settings:
     @staticmethod
     def defaults() -> "Settings":
         endpoints = [
-            Endpoint("Capture A 1/2", "Application or physical input", "1-2", monitor=True),
-            Endpoint("Capture B 3/4", "Application", "3-4"),
-            Endpoint("DAW Master return 1/2", "DAW return", "1-2", monitor=True),
-            Endpoint("DAW cue return 3/4", "DAW return", "3-4"),
-            Endpoint("Monitoring bus", "Virtual bus", "65-66", monitor=True),
-            Endpoint("Utility bus", "Virtual bus", "67-68"),
+            Endpoint("Main output 1/2", "Default monitoring output", "1-2", monitor=True, role="Master monitor"),
+            Endpoint("System audio capture 1/2", "Application or physical input", "1-2", monitor=True, role="System audio"),
+            Endpoint("Capture B 3/4", "Application", "3-4", role="Application capture"),
+            Endpoint("Primary microphone 7/8", "Physical input", "7-8", monitor=False, muted=True, volume=0, role="Microphone"),
+            Endpoint("DAW Master return 1/2", "DAW return", "1-2", monitor=True, role="DAW master return"),
+            Endpoint("DAW cue return 3/4", "DAW return", "3-4", role="DAW cue return"),
+            Endpoint("Screen Reader Bus 61/62", "Virtual bus", "61-62", monitor=True, role="Screen reader"),
+            Endpoint("TTS Bus 63/64", "Virtual bus", "63-64", monitor=True, role="TTS"),
+            Endpoint("Communications Bus 65/66", "Virtual bus", "65-66", monitor=True, role="Communications"),
+            Endpoint("Emergency Accessibility Bus 67/68", "Virtual bus", "67-68", monitor=True, role="Emergency accessibility"),
+            Endpoint("Sessionwire input guard", "Application", "55-56", monitor=False, muted=True, role="Sessionwire", white_noise_guard=True),
+            Endpoint("Sessionwire output guard", "DAW return", "57-58", monitor=False, muted=True, role="Sessionwire", white_noise_guard=True),
         ]
         routes = [
-            Route("DAW cue return 3/4", "Capture A 1/2", volume=85),
-            Route("Capture B 3/4", "Monitoring bus", volume=100),
+            Route("System audio capture 1/2", "Main output 1/2", volume=100),
+            Route("Screen Reader Bus 61/62", "Main output 1/2", volume=100),
+            Route("TTS Bus 63/64", "Main output 1/2", volume=100),
+            Route("DAW cue return 3/4", "System audio capture 1/2", volume=85),
         ]
         effects = [
             EffectSlot("No effect loaded", "VST3", "Monitoring bus"),
@@ -226,6 +245,20 @@ class Settings:
             EffectSlot("Legacy VST2 disabled", "VST2 legacy", "Utility bus", enabled=False, bypassed=True),
         ]
         return Settings(endpoints=endpoints, routes=routes, effects=effects)
+
+    def ensure_core_audio_policy(self) -> None:
+        required = {endpoint.name: endpoint for endpoint in Settings.defaults().endpoints}
+        existing = {endpoint.name for endpoint in self.endpoints}
+        for name, endpoint in required.items():
+            if name not in existing:
+                self.endpoints.append(endpoint)
+        for endpoint in self.endpoints:
+            if "sessionwire" in endpoint.name.lower() and self.sessionwire_white_noise_guard:
+                endpoint.white_noise_guard = True
+        route_names = {(route.source, route.destination) for route in self.routes}
+        for route in Settings.defaults().routes:
+            if (route.source, route.destination) not in route_names:
+                self.routes.append(route)
 
     @staticmethod
     def load() -> "Settings":
@@ -255,8 +288,10 @@ class Settings:
                     defaults.effects = [EffectSlot(**{field_name: item[field_name] for field_name in effect_fields if field_name in item}) for item in value]
                 elif hasattr(defaults, key):
                     setattr(defaults, key, value)
+            defaults.ensure_core_audio_policy()
             return defaults
         except Exception:
+            defaults.ensure_core_audio_policy()
             return defaults
 
     def save(self) -> None:
@@ -280,6 +315,7 @@ class ASIOAFrame(wx.Frame):
         self.controls: dict[str, wx.Window] = {}
         self.route_action_buttons: dict[str, wx.Button] = {}
         self.endpoint_action_buttons: dict[int, dict[str, wx.Button]] = {}
+        self._list_selection_memory: dict[int, int] = {}
         self._last_overview_html = ""
         self._settings_dirty = False
         self._last_saved_payload = ""
@@ -300,7 +336,6 @@ class ASIOAFrame(wx.Frame):
         self.SetStatus("ASIOA control panel ready. Open the Smart Buffer tab to tune latency and stability.")
         self.update_overview()
         self.announce_startup_status()
-        wx.CallAfter(self.show_driver_install_alert_if_needed)
         wx.CallAfter(self.start_plugin_scan)
         self.play_sound("ready")
         self.Bind(wx.EVT_CLOSE, self.on_close)
@@ -405,7 +440,7 @@ class ASIOAFrame(wx.Frame):
             "Configured audio routes",
         )
         sizer.Add(self.route_list, 1, wx.EXPAND | wx.ALL, 6)
-        self.route_list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda _event: self.update_route_action_labels())
+        self.route_list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda event: self.on_route_list_selection(event))
         self.route_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda _event: self.update_route_action_labels())
         buttons = wx.BoxSizer(wx.HORIZONTAL)
         for key, label, handler in [
@@ -421,36 +456,60 @@ class ASIOAFrame(wx.Frame):
             buttons.Add(button, 0, wx.RIGHT, 6)
         sizer.Add(buttons, 0, wx.ALL, 6)
         self.populate_routes()
+        self.ensure_list_selection(self.route_list)
         self.update_route_action_labels()
 
     def _add_inputs_tab(self) -> None:
         panel, sizer = self._new_tab("Inputs")
         self.input_list = self._make_list(
             panel,
-            ["Name", "Kind", "Channels", "Enabled", "Monitoring", "Solo state", "Mute state", "Volume", "Buffer"],
+            ["Name", "Kind", "Channels", "Role", "Enabled", "Monitoring", "Solo state", "Mute state", "Volume", "Buffer", "Noise guard"],
             "Input endpoints",
         )
         sizer.Add(self.input_list, 1, wx.EXPAND | wx.ALL, 6)
         self._add_endpoint_actions(panel, sizer, self.input_list)
         self.populate_endpoints()
+        self.ensure_list_selection(self.input_list)
         self.update_endpoint_action_labels(self.input_list)
 
     def _add_outputs_tab(self) -> None:
         panel, sizer = self._new_tab("Outputs")
         self.output_list = self._make_list(
             panel,
-            ["Name", "Kind", "Channels", "Enabled", "Monitoring", "Solo state", "Mute state", "Volume", "Buffer"],
+            ["Name", "Kind", "Channels", "Role", "Enabled", "Monitoring", "Solo state", "Mute state", "Volume", "Buffer", "Noise guard"],
             "Output endpoints and DAW returns",
         )
         sizer.Add(self.output_list, 1, wx.EXPAND | wx.ALL, 6)
         self._add_endpoint_actions(panel, sizer, self.output_list)
         self.populate_endpoints()
+        self.ensure_list_selection(self.output_list)
         self.update_endpoint_action_labels(self.output_list)
 
     def _add_monitoring_tab(self) -> None:
         panel, sizer = self._new_tab("Monitoring")
         self.controls["monitor_in_app"] = self._add_checkbox(panel, sizer, "Monitor directly in ASIOA", self.settings.monitor_in_app)
         self.controls["bypass_to_daw"] = self._add_checkbox(panel, sizer, "Bypass ASIOA monitoring and route directly through the DAW", self.settings.bypass_to_daw)
+        self.controls["default_monitor_device"] = self._add_choice(
+            panel,
+            sizer,
+            "Default monitoring output device:",
+            self.monitor_device_choices(),
+            self.settings.default_monitor_device,
+        )
+        self.controls["system_audio_master_pair"] = self._add_choice(
+            panel,
+            sizer,
+            "System audio master pair:",
+            ["Main output 1/2", *CHANNEL_PAIRS],
+            self.settings.system_audio_master_pair,
+        )
+        self.controls["screen_reader_master_pair"] = self._add_choice(
+            panel,
+            sizer,
+            "Screen reader and TTS default pair:",
+            ["Main output 1/2", *CHANNEL_PAIRS],
+            self.settings.screen_reader_master_pair,
+        )
         self._add_slider(panel, sizer, "Default monitor volume percent:", "monitor_volume", 100, 0, 150)
         self._add_readonly_text(
             panel,
@@ -483,11 +542,18 @@ class ASIOAFrame(wx.Frame):
             DRIVER_INSTALL_OPTIONS,
             self.settings.driver_install_option,
         )
+        self.controls["sessionwire_white_noise_guard"] = self._add_checkbox(
+            panel,
+            sizer,
+            "Auto-mute Sessionwire monitoring when steady white noise is detected",
+            self.settings.sessionwire_white_noise_guard,
+        )
+        self._add_slider(panel, sizer, "Sessionwire white-noise guard threshold in dB:", "sessionwire_noise_floor_db", self.settings.sessionwire_noise_floor_db, -90, -20)
         self._add_readonly_text(
             panel,
             sizer,
             "Device discovery:",
-            "Devices are refreshed automatically in the background. Native driver enumeration will be provided by the selected engine mode.",
+            "Devices are refreshed automatically in the background. The control panel keeps the selected item and action labels stable while the device lists refresh.",
         )
         self._add_readonly_text(
             panel,
@@ -638,10 +704,11 @@ class ASIOAFrame(wx.Frame):
         control.SetName(name)
         for index, column in enumerate(columns):
             control.InsertColumn(index, column, width=wx.LIST_AUTOSIZE_USEHEADER)
+        control.Bind(wx.EVT_SET_FOCUS, lambda event, list_control=control: self.on_list_focus(event, list_control))
         return control
 
     def _add_endpoint_actions(self, panel: wx.Panel, sizer: wx.BoxSizer, target: wx.ListCtrl) -> None:
-        target.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda _event: self.update_endpoint_action_labels(target))
+        target.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda event: self.on_endpoint_list_selection(event, target))
         target.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda _event: self.update_endpoint_action_labels(target))
         row = wx.BoxSizer(wx.HORIZONTAL)
         actions = [
@@ -661,6 +728,68 @@ class ASIOAFrame(wx.Frame):
         self.endpoint_action_buttons[id(target)] = buttons
         sizer.Add(row, 0, wx.ALL, 6)
 
+    def monitor_device_choices(self) -> list[str]:
+        choices = [
+            endpoint.name
+            for endpoint in self.settings.endpoints
+            if endpoint.kind in {"Default monitoring output", "DAW return", "Virtual bus"} or endpoint.monitor
+        ]
+        return choices or ["Main output 1/2"]
+
+    def on_list_focus(self, event: wx.FocusEvent, control: wx.ListCtrl) -> None:
+        self.ensure_list_selection(control)
+        event.Skip()
+
+    def on_route_list_selection(self, event: wx.ListEvent) -> None:
+        self.remember_list_selection(self.route_list, event.GetIndex())
+        self.update_route_action_labels()
+        event.Skip()
+
+    def on_endpoint_list_selection(self, event: wx.ListEvent, control: wx.ListCtrl) -> None:
+        self.remember_list_selection(control, event.GetIndex())
+        self.update_endpoint_action_labels(control)
+        event.Skip()
+
+    def remember_list_selection(self, control: wx.ListCtrl, index: int) -> None:
+        if index >= 0:
+            self._list_selection_memory[id(control)] = index
+
+    def ensure_list_selection(self, control: wx.ListCtrl) -> int:
+        selected = control.GetFirstSelected()
+        if selected >= 0:
+            self.remember_list_selection(control, selected)
+            return selected
+        count = control.GetItemCount()
+        if count <= 0:
+            return -1
+        preferred = self._list_selection_memory.get(id(control), 0)
+        index = max(0, min(preferred, count - 1))
+        control.Select(index)
+        control.Focus(index)
+        control.EnsureVisible(index)
+        self.remember_list_selection(control, index)
+        return index
+
+    def restore_list_selection(self, control: wx.ListCtrl, preferred_index: int | None = None) -> int:
+        count = control.GetItemCount()
+        if count <= 0:
+            return -1
+        if preferred_index is None:
+            preferred_index = self._list_selection_memory.get(id(control), 0)
+        index = max(0, min(preferred_index, count - 1))
+        control.Select(index)
+        control.Focus(index)
+        control.EnsureVisible(index)
+        self.remember_list_selection(control, index)
+        return index
+
+    def restore_endpoint_selection(self, control: wx.ListCtrl, endpoint_name: str | None) -> int:
+        if endpoint_name:
+            for row in range(control.GetItemCount()):
+                if control.GetItemText(row, 0) == endpoint_name:
+                    return self.restore_list_selection(control, row)
+        return self.restore_list_selection(control)
+
     def populate_routes(self) -> None:
         self.route_list.DeleteAllItems()
         for route in self.settings.routes:
@@ -669,7 +798,7 @@ class ASIOAFrame(wx.Frame):
     def populate_endpoints(self) -> None:
         for control, predicate in [
             (getattr(self, "input_list", None), lambda item: item.kind != "DAW return"),
-            (getattr(self, "output_list", None), lambda item: item.kind == "DAW return" or item.kind == "Virtual bus"),
+            (getattr(self, "output_list", None), lambda item: item.kind in {"Default monitoring output", "DAW return", "Virtual bus"}),
         ]:
             if control is None:
                 continue
@@ -692,7 +821,7 @@ class ASIOAFrame(wx.Frame):
             control.SetColumnWidth(column, wx.LIST_AUTOSIZE_USEHEADER)
 
     def selected_index(self, control: wx.ListCtrl) -> int:
-        return control.GetFirstSelected()
+        return self.ensure_list_selection(control)
 
     def selected_route(self) -> Route | None:
         index = self.selected_index(self.route_list)
@@ -731,12 +860,14 @@ class ASIOAFrame(wx.Frame):
     def endpoint_summary(self, endpoint: Endpoint) -> str:
         return (
             f"{endpoint.name}, channels {endpoint.channels}, "
+            f"role {endpoint.role}, "
             f"{'enabled' if endpoint.enabled else 'disabled'}, "
             f"{'monitoring on' if endpoint.monitor else 'monitoring off'}, "
             f"{'solo on' if endpoint.solo else 'solo off'}, "
             f"{'muted' if endpoint.muted else 'not muted'}, "
             f"volume {endpoint.volume} percent, "
-            f"buffer {endpoint.buffer_override}"
+            f"buffer {endpoint.buffer_override}, "
+            f"{'white-noise guard on' if endpoint.white_noise_guard else 'white-noise guard off'}"
         )
 
     def route_summary(self, route: Route) -> str:
@@ -776,11 +907,12 @@ class ASIOAFrame(wx.Frame):
                 button.SetLabel(label)
 
     def add_safe_route(self, _event: wx.CommandEvent) -> None:
-        self.settings.routes.append(Route("DAW cue return 3/4", "Capture A 1/2", volume=85))
+        self.settings.routes.append(Route("DAW cue return 3/4", "System audio capture 1/2", volume=85))
         self.populate_routes()
+        self.restore_list_selection(self.route_list, len(self.settings.routes) - 1)
         self.update_route_action_labels()
         self.mark_settings_dirty()
-        self.SetStatus("Added safe route from DAW cue return 3 and 4 to Capture A 1 and 2.")
+        self.SetStatus("Added safe route from DAW cue return 3 and 4 to System audio capture 1 and 2.")
 
     def toggle_route_mute(self, _event: wx.CommandEvent) -> None:
         index = self.selected_index(self.route_list)
@@ -790,6 +922,7 @@ class ASIOAFrame(wx.Frame):
         route = self.settings.routes[index]
         route.muted = not route.muted
         self.populate_routes()
+        self.restore_list_selection(self.route_list, index)
         self.update_route_action_labels()
         self.mark_settings_dirty()
         self.SetStatus(f"{self.route_action_name(route)} is now {'muted' if route.muted else 'unmuted'}.")
@@ -802,6 +935,7 @@ class ASIOAFrame(wx.Frame):
         route = self.settings.routes[index]
         route.volume = max(0, min(150, route.volume + delta))
         self.populate_routes()
+        self.restore_list_selection(self.route_list, index)
         self.update_route_action_labels()
         self.mark_settings_dirty()
         self.SetStatus(f"{self.route_action_name(route)} volume is now {route.volume} percent.")
@@ -813,6 +947,7 @@ class ASIOAFrame(wx.Frame):
             return
         del self.settings.routes[index]
         self.populate_routes()
+        self.restore_list_selection(self.route_list, index)
         self.update_route_action_labels()
         self.mark_settings_dirty()
         self.SetStatus("Route removed.")
@@ -828,8 +963,10 @@ class ASIOAFrame(wx.Frame):
         if endpoint is None:
             self.SetStatus("No endpoint selected.")
             return
+        endpoint_name = endpoint.name
         setattr(endpoint, attr, not getattr(endpoint, attr))
         self.populate_endpoints()
+        self.restore_endpoint_selection(control, endpoint_name)
         self.update_endpoint_action_labels(control)
         self.mark_settings_dirty()
         if attr == "muted":
@@ -852,8 +989,10 @@ class ASIOAFrame(wx.Frame):
         if endpoint is None:
             self.SetStatus("No endpoint selected.")
             return
+        endpoint_name = endpoint.name
         endpoint.volume = max(0, min(150, endpoint.volume + delta))
         self.populate_endpoints()
+        self.restore_endpoint_selection(control, endpoint_name)
         self.update_endpoint_action_labels(control)
         self.mark_settings_dirty()
         self.SetStatus(f"{self.endpoint_action_name(endpoint)} volume is now {endpoint.volume} percent.")
@@ -1201,6 +1340,9 @@ class ASIOAFrame(wx.Frame):
                 f"Settings path: {SETTINGS_PATH}",
                 f"Configured driver mode: {self.settings.driver_mode}",
                 *self.driver_status_lines(),
+                f"Default monitor device: {self.settings.default_monitor_device}",
+                f"System audio master pair: {self.settings.system_audio_master_pair}",
+                f"Screen reader and TTS default pair: {self.settings.screen_reader_master_pair}",
                 f"Smart buffer mode: {self.settings.smart_buffer_mode}",
                 f"Sample rate: {self.settings.sample_rate}",
                 f"Starting buffer: {self.settings.buffer_size} samples",
@@ -1211,6 +1353,8 @@ class ASIOAFrame(wx.Frame):
                 f"Update channel: {self.settings.update_channel}",
                 f"Update source: {self.settings.update_source}",
                 f"Built-in sounds: {self.settings.enable_builtin_sounds}",
+                f"Sessionwire white-noise guard: {self.settings.sessionwire_white_noise_guard}",
+                f"Sessionwire white-noise threshold: {self.settings.sessionwire_noise_floor_db} dB",
                 f"Diagnostics inbox: {DIAGNOSTICS_INBOX}",
             ]
         )
@@ -1251,9 +1395,13 @@ class ASIOAFrame(wx.Frame):
   <p class="status-line">Smart Buffer mode: <strong>{self.settings.smart_buffer_mode}</strong>.</p>
   <p class="status-line">Starting buffer: <strong>{self.settings.buffer_size} samples</strong>.</p>
   <p class="status-line">Sample rate: <strong>{self.settings.sample_rate} Hz</strong>.</p>
+  <p class="status-line">Default monitoring output: <strong>{self.settings.default_monitor_device}</strong>.</p>
+  <p class="status-line">System audio master pair: <strong>{self.settings.system_audio_master_pair}</strong>.</p>
+  <p class="status-line">Screen reader and TTS default pair: <strong>{self.settings.screen_reader_master_pair}</strong>.</p>
   <p class="status-line">Screen reader output: <strong>{self.settings.screen_reader_output}</strong>.</p>
   <p class="status-line">Direct ASIOA screen reader capture: <strong>{'on' if self.settings.screen_reader_router_capture else 'off'}</strong>.</p>
   <p class="status-line">Built-in background and action sounds: <strong>{'on' if self.settings.enable_builtin_sounds else 'off'}</strong>.</p>
+  <p class="status-line">Sessionwire white-noise guard: <strong>{'on' if self.settings.sessionwire_white_noise_guard else 'off'}</strong>, threshold <strong>{self.settings.sessionwire_noise_floor_db} dB</strong>.</p>
   <h2>Driver installation</h2>
   <ul>{driver_status}</ul>
   <h2>Recent status</h2>

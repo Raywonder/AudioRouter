@@ -28,6 +28,10 @@ New-Item -ItemType Directory -Path $WxPublishDir -Force | Out-Null
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 New-Item -ItemType Directory -Path (Split-Path -Parent $PythonVenv) -Force | Out-Null
 
+Get-ChildItem $OutputDir -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "ASIOA-Audio-Router-Setup-*.exe" -or $_.Name -like "ASIOA-Audio-Router-win-x64-portable-*.zip" } |
+    Remove-Item -Force
+
 dotnet build $solution -c $Configuration
 dotnet publish $appProject -c $Configuration -r win-x64 --self-contained true -o (Join-Path $PublishDir "wpf-secondary")
 
@@ -55,10 +59,7 @@ if (Test-Path $PublishDir) {
 Copy-Item -Path (Join-Path $wxAppDir "*") -Destination $PublishDir -Recurse -Force
 & $iscc $installerScript
 
-$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.3.zip"
-if (Test-Path $portableZip) {
-    Remove-Item -LiteralPath $portableZip -Force
-}
+$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.4.zip"
 Compress-Archive -Path (Join-Path $PublishDir "*") -DestinationPath $portableZip -Force
 
 $checksumsPath = Join-Path $OutputDir "SHA256SUMS.txt"
