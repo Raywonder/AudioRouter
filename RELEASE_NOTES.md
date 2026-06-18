@@ -6,6 +6,8 @@ This hotfix improves keyboard focus, default routing policy, monitoring-device s
 
 - Route, input, and output lists now remember the last focused item. If focus moves to an action button, that button still acts on the remembered list item; if no item has ever been touched, the first row is selected silently.
 - Route and endpoint action buttons now keep specific labels such as muting, unmuting, soloing, enabling, or lowering volume for the selected route or channel.
+- Route, input, output, and effect lists now expose checkbox state where wxPython supports it, so enabled and disabled state can be changed from the list while add and remove actions remain outside the list.
+- Action buttons now keep focus after activation, preserve the selected list item, and announce the exact changed item and state to screen readers.
 - Default routing now includes Main output 1/2, System audio capture 1/2, a muted Primary microphone 7/8, Screen Reader Bus 61/62, TTS Bus 63/64, Communications Bus 65/66, Emergency Accessibility Bus 67/68, and Sessionwire guard endpoints.
 - Monitoring settings now include the default monitoring output device, system audio master pair, and screen-reader/TTS default pair.
 - Devices now include a Sessionwire white-noise guard setting and threshold for the audio engine policy.
@@ -13,7 +15,10 @@ This hotfix improves keyboard focus, default routing policy, monitoring-device s
 
 ## Changed
 
-- The control panel no longer opens a driver-install prompt on every normal launch. Driver installation is offered during setup, and the Overview or Devices tab keeps an install or repair button available later.
+- The control panel no longer opens a driver-install prompt on every normal launch. Driver installation is offered during setup, and the Overview tab only shows install or repair when a packaged driver is present and the installed driver is missing or unhealthy.
+- Driver health now checks Windows ASIO registry registration and the registered driver DLL path instead of trusting only a local marker file.
+- The main app no longer shows the system driver installation preference selector. That choice stays in the installer wizard.
+- The obvious DAW or master output 1/2 to capture or input 1/2 feedback path is disabled and muted when settings load with feedback protection enabled.
 - Microphones are muted and monitoring-off by default on a fresh profile, but saved user choices are not forcibly reset on later launches.
 
 ## Notes

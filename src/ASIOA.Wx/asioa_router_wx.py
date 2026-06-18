@@ -18,6 +18,11 @@ import wx
 import wx.adv
 import wx.html2
 
+try:
+    import winreg
+except ImportError:  # pragma: no cover - non-Windows dev/test environments.
+    winreg = None
+
 
 APP_NAME = "ASIOA Audio Router"
 APP_VERSION = "0.2.4"
@@ -82,6 +87,7 @@ DRIVER_INSTALL_OPTIONS = [
 ]
 PLUGIN_SCAN_INTERVAL_MS = 300000
 AUTOSAVE_DELAY_MS = 3000
+ASIOA_DRIVER_REGISTRY_PATH = r"SOFTWARE\ASIO\ASIOA Audio Router"
 
 
 @dataclass(slots=True)
@@ -102,6 +108,24 @@ class PluginInventory:
             f"Legacy VST2 plug-ins found: {self.vst2}.",
             f"Plug-in folders checked: {self.scanned_paths}.",
         ]
+
+
+@dataclass(slots=True)
+class DriverHealth:
+    registered: bool = False
+    dll_path: str = ""
+    dll_exists: bool = False
+    package_available: bool = False
+    marker_present: bool = False
+    error: str = ""
+
+    @property
+    def healthy(self) -> bool:
+        return self.registered and self.dll_exists
+
+    @property
+    def needs_repair(self) -> bool:
+        return not self.healthy
 
 
 @dataclass(slots=True)
@@ -260,6 +284,16 @@ class Settings:
         for route in Settings.defaults().routes:
             if (route.source, route.destination) not in route_names:
                 self.routes.append(route)
+        if self.protect_daw_master_feedback:
+            for route in self.routes:
+                source = route.source.lower()
+                destination = route.destination.lower()
+                master_source = ("daw master" in source or "main output 1/2" in source or "output 1/2" in source)
+                capture_destination = "system audio capture 1/2" in destination or "capture a" in destination or "input 1/2" in destination
+                if master_source and capture_destination:
+                    route.enabled = False
+                    route.muted = True
+                    route.monitor = False
 
     @staticmethod
     def load() -> "Settings":
@@ -313,15 +347,18 @@ class ASIOAFrame(wx.Frame):
         self.input_list: wx.ListCtrl
         self.output_list: wx.ListCtrl
         self.effects_list: wx.ListCtrl
+        self.driver_action_button: wx.Button | None = None
         self.controls: dict[str, wx.Window] = {}
         self.route_action_buttons: dict[str, wx.Button] = {}
         self.endpoint_action_buttons: dict[int, dict[str, wx.Button]] = {}
         self._list_selection_memory: dict[int, int] = {}
+        self._populating_lists = False
         self._force_exit = False
         self._last_escape_at: datetime | None = None
         self._last_overview_html = ""
         self._settings_dirty = False
         self._last_saved_payload = ""
+        self._last_announced_status = ""
         self.status_history: list[str] = []
         self.tray_icon: ASIOATrayIcon | None = None
         self._build_menu()
@@ -340,6 +377,7 @@ class ASIOAFrame(wx.Frame):
         self.plugin_timer.Start(PLUGIN_SCAN_INTERVAL_MS)
         self.Centre()
         self.SetStatus("ASIOA control panel ready. Open the Smart Buffer tab to tune latency and stability.")
+        self.update_driver_action_visibility()
         self.update_overview()
         self.announce_startup_status()
         wx.CallAfter(self.start_plugin_scan)
@@ -442,6 +480,7 @@ class ASIOAFrame(wx.Frame):
         driver_button = wx.Button(panel, label="Install or repair ASIOA audio driver")
         driver_button.SetName("Install or repair ASIOA audio driver")
         driver_button.Bind(wx.EVT_BUTTON, lambda _event: self.install_or_repair_driver())
+        self.driver_action_button = driver_button
         sizer.Add(driver_button, 0, wx.ALL, 6)
 
     def _add_routing_tab(self) -> None:
@@ -458,8 +497,8 @@ class ASIOAFrame(wx.Frame):
         for key, label, handler in [
             ("add", "Add safe route", self.add_safe_route),
             ("mute", "Select a route to mute or unmute it", self.toggle_route_mute),
-            ("volume_down", "Select a route to lower its volume 5 percent", lambda _event: self.adjust_route_volume(-5)),
-            ("volume_up", "Select a route to raise its volume 5 percent", lambda _event: self.adjust_route_volume(5)),
+            ("volume_down", "Select a route to lower its volume 5 percent", lambda event: self.adjust_route_volume(-5, event)),
+            ("volume_up", "Select a route to raise its volume 5 percent", lambda event: self.adjust_route_volume(5, event)),
             ("remove", "Select a route to remove it", self.remove_route),
         ]:
             button = wx.Button(panel, label=label)
@@ -548,13 +587,6 @@ class ASIOAFrame(wx.Frame):
 
     def _add_devices_tab(self) -> None:
         panel, sizer = self._new_tab("Devices")
-        self.controls["driver_install_option"] = self._add_choice(
-            panel,
-            sizer,
-            "System driver installation preference:",
-            DRIVER_INSTALL_OPTIONS,
-            self.settings.driver_install_option,
-        )
         self.controls["sessionwire_white_noise_guard"] = self._add_checkbox(
             panel,
             sizer,
@@ -715,9 +747,15 @@ class ASIOAFrame(wx.Frame):
     def _make_list(self, parent: wx.Window, columns: list[str], name: str) -> wx.ListCtrl:
         control = wx.ListCtrl(parent, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         control.SetName(name)
+        if hasattr(control, "EnableCheckBoxes"):
+            control.EnableCheckBoxes(True)
         for index, column in enumerate(columns):
             control.InsertColumn(index, column, width=wx.LIST_AUTOSIZE_USEHEADER)
         control.Bind(wx.EVT_SET_FOCUS, lambda event, list_control=control: self.on_list_focus(event, list_control))
+        if hasattr(wx, "EVT_LIST_ITEM_CHECKED"):
+            control.Bind(wx.EVT_LIST_ITEM_CHECKED, self.on_list_item_checked)
+        if hasattr(wx, "EVT_LIST_ITEM_UNCHECKED"):
+            control.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self.on_list_item_checked)
         return control
 
     def _add_endpoint_actions(self, panel: wx.Panel, sizer: wx.BoxSizer, target: wx.ListCtrl) -> None:
@@ -725,12 +763,12 @@ class ASIOAFrame(wx.Frame):
         target.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda _event: self.update_endpoint_action_labels(target))
         row = wx.BoxSizer(wx.HORIZONTAL)
         actions = [
-            ("enabled", "Select a channel to enable or disable it", lambda _event: self.toggle_endpoint(target, "enabled")),
-            ("monitor", "Select a channel to turn monitoring on or off", lambda _event: self.toggle_endpoint(target, "monitor")),
-            ("solo", "Select a channel to turn solo on or off", lambda _event: self.toggle_endpoint(target, "solo")),
-            ("muted", "Select a channel to mute or unmute it", lambda _event: self.toggle_endpoint(target, "muted")),
-            ("volume_down", "Select a channel to lower its volume 5 percent", lambda _event: self.adjust_endpoint_volume(target, -5)),
-            ("volume_up", "Select a channel to raise its volume 5 percent", lambda _event: self.adjust_endpoint_volume(target, 5)),
+            ("enabled", "Select a channel to enable or disable it", lambda event: self.toggle_endpoint(target, "enabled", event)),
+            ("monitor", "Select a channel to turn monitoring on or off", lambda event: self.toggle_endpoint(target, "monitor", event)),
+            ("solo", "Select a channel to turn solo on or off", lambda event: self.toggle_endpoint(target, "solo", event)),
+            ("muted", "Select a channel to mute or unmute it", lambda event: self.toggle_endpoint(target, "muted", event)),
+            ("volume_down", "Select a channel to lower its volume 5 percent", lambda event: self.adjust_endpoint_volume(target, -5, event)),
+            ("volume_up", "Select a channel to raise its volume 5 percent", lambda event: self.adjust_endpoint_volume(target, 5, event)),
         ]
         buttons: dict[str, wx.Button] = {}
         for key, label, handler in actions:
@@ -792,7 +830,7 @@ class ASIOAFrame(wx.Frame):
         self.remember_list_selection(control, index)
         return index
 
-    def restore_list_selection(self, control: wx.ListCtrl, preferred_index: int | None = None) -> int:
+    def restore_list_selection(self, control: wx.ListCtrl, preferred_index: int | None = None, focus_row: bool = True) -> int:
         count = control.GetItemCount()
         if count <= 0:
             return -1
@@ -800,24 +838,29 @@ class ASIOAFrame(wx.Frame):
             preferred_index = self._list_selection_memory.get(id(control), 0)
         index = max(0, min(preferred_index, count - 1))
         control.Select(index)
-        control.Focus(index)
+        if focus_row:
+            control.Focus(index)
         control.EnsureVisible(index)
         self.remember_list_selection(control, index)
         return index
 
-    def restore_endpoint_selection(self, control: wx.ListCtrl, endpoint_name: str | None) -> int:
+    def restore_endpoint_selection(self, control: wx.ListCtrl, endpoint_name: str | None, focus_row: bool = True) -> int:
         if endpoint_name:
             for row in range(control.GetItemCount()):
                 if control.GetItemText(row, 0) == endpoint_name:
-                    return self.restore_list_selection(control, row)
-        return self.restore_list_selection(control)
+                    return self.restore_list_selection(control, row, focus_row=focus_row)
+        return self.restore_list_selection(control, focus_row=focus_row)
 
     def populate_routes(self) -> None:
+        self._populating_lists = True
         self.route_list.DeleteAllItems()
         for route in self.settings.routes:
-            self._append_row(self.route_list, route.row())
+            row = self._append_row(self.route_list, route.row())
+            self._check_list_row(self.route_list, row, route.enabled)
+        self._populating_lists = False
 
     def populate_endpoints(self) -> None:
+        self._populating_lists = True
         for control, predicate in [
             (getattr(self, "input_list", None), lambda item: item.kind != "DAW return"),
             (getattr(self, "output_list", None), lambda item: item.kind in {"Default monitoring output", "DAW return", "Virtual bus"}),
@@ -827,20 +870,73 @@ class ASIOAFrame(wx.Frame):
             control.DeleteAllItems()
             for endpoint in self.settings.endpoints:
                 if predicate(endpoint):
-                    self._append_row(control, endpoint.row())
+                    row = self._append_row(control, endpoint.row())
+                    self._check_list_row(control, row, endpoint.enabled)
+        self._populating_lists = False
 
     def populate_effects(self) -> None:
+        self._populating_lists = True
         self.effects_list.DeleteAllItems()
         for effect in self.settings.effects:
-            self._append_row(self.effects_list, effect.row())
+            row = self._append_row(self.effects_list, effect.row())
+            self._check_list_row(self.effects_list, row, effect.enabled)
+        self._populating_lists = False
 
     @staticmethod
-    def _append_row(control: wx.ListCtrl, values: list[str]) -> None:
+    def _append_row(control: wx.ListCtrl, values: list[str]) -> int:
         index = control.InsertItem(control.GetItemCount(), values[0])
         for column, value in enumerate(values[1:], start=1):
             control.SetItem(index, column, value)
         for column in range(len(values)):
             control.SetColumnWidth(column, wx.LIST_AUTOSIZE_USEHEADER)
+        return index
+
+    @staticmethod
+    def _check_list_row(control: wx.ListCtrl, row: int, checked: bool) -> None:
+        if row >= 0 and hasattr(control, "CheckItem"):
+            try:
+                control.CheckItem(row, checked)
+            except Exception:
+                pass
+
+    def on_list_item_checked(self, event: wx.ListEvent) -> None:
+        if self._populating_lists:
+            event.Skip()
+            return
+        control = event.GetEventObject()
+        if not isinstance(control, wx.ListCtrl):
+            event.Skip()
+            return
+        row = event.GetIndex()
+        checked = True
+        if hasattr(control, "IsItemChecked"):
+            try:
+                checked = bool(control.IsItemChecked(row))
+            except Exception:
+                checked = True
+        if control is getattr(self, "route_list", None):
+            if 0 <= row < len(self.settings.routes):
+                route = self.settings.routes[row]
+                route.enabled = checked
+                self.remember_list_selection(control, row)
+                self.update_route_action_labels()
+                self.mark_settings_dirty()
+                self.SetStatus(f"{self.route_action_name(route)}, {'enabled' if checked else 'disabled'}.")
+        elif control is getattr(self, "input_list", None) or control is getattr(self, "output_list", None):
+            endpoint = self.endpoint_for_row(control, row)
+            if endpoint is not None:
+                endpoint.enabled = checked
+                self.remember_list_selection(control, row)
+                self.update_endpoint_action_labels(control)
+                self.mark_settings_dirty()
+                self.SetStatus(f"{self.endpoint_action_name(endpoint)}, {'enabled' if checked else 'disabled'}.")
+        elif control is getattr(self, "effects_list", None) and 0 <= row < len(self.settings.effects):
+            effect = self.settings.effects[row]
+            effect.enabled = checked
+            self.remember_list_selection(control, row)
+            self.mark_settings_dirty()
+            self.SetStatus(f"{effect.name}, {'enabled' if checked else 'disabled'}.")
+        event.Skip()
 
     def selected_index(self, control: wx.ListCtrl) -> int:
         return self.ensure_list_selection(control)
@@ -875,6 +971,7 @@ class ASIOAFrame(wx.Frame):
             button = self.route_action_buttons.get(key)
             if button:
                 button.SetLabel(label)
+                button.SetName(label)
 
     def endpoint_action_name(self, endpoint: Endpoint) -> str:
         return f"{endpoint.name}, channels {endpoint.channels}"
@@ -927,14 +1024,24 @@ class ASIOAFrame(wx.Frame):
             button = buttons.get(key)
             if button:
                 button.SetLabel(label)
+                button.SetName(label)
+
+    @staticmethod
+    def refocus_action_button(event_or_window: wx.Event | wx.Window | None) -> None:
+        if event_or_window is None:
+            return
+        window = event_or_window.GetEventObject() if isinstance(event_or_window, wx.Event) else event_or_window
+        if isinstance(window, wx.Window):
+            wx.CallAfter(window.SetFocus)
 
     def add_safe_route(self, _event: wx.CommandEvent) -> None:
         self.settings.routes.append(Route("DAW cue return 3/4", "System audio capture 1/2", volume=85))
         self.populate_routes()
-        self.restore_list_selection(self.route_list, len(self.settings.routes) - 1)
+        self.restore_list_selection(self.route_list, len(self.settings.routes) - 1, focus_row=False)
         self.update_route_action_labels()
         self.mark_settings_dirty()
         self.SetStatus("Added safe route from DAW cue return 3 and 4 to System audio capture 1 and 2.")
+        self.refocus_action_button(_event)
 
     def toggle_route_mute(self, _event: wx.CommandEvent) -> None:
         index = self.selected_index(self.route_list)
@@ -944,12 +1051,13 @@ class ASIOAFrame(wx.Frame):
         route = self.settings.routes[index]
         route.muted = not route.muted
         self.populate_routes()
-        self.restore_list_selection(self.route_list, index)
+        self.restore_list_selection(self.route_list, index, focus_row=False)
         self.update_route_action_labels()
         self.mark_settings_dirty()
-        self.SetStatus(f"{self.route_action_name(route)} is now {'muted' if route.muted else 'unmuted'}.")
+        self.SetStatus(f"{self.route_action_name(route)}, {'muted' if route.muted else 'unmuted'}.")
+        self.refocus_action_button(_event)
 
-    def adjust_route_volume(self, delta: int) -> None:
+    def adjust_route_volume(self, delta: int, event: wx.Event | None = None) -> None:
         index = self.selected_index(self.route_list)
         if index < 0:
             self.SetStatus("No route selected.")
@@ -957,22 +1065,25 @@ class ASIOAFrame(wx.Frame):
         route = self.settings.routes[index]
         route.volume = max(0, min(150, route.volume + delta))
         self.populate_routes()
-        self.restore_list_selection(self.route_list, index)
+        self.restore_list_selection(self.route_list, index, focus_row=False)
         self.update_route_action_labels()
         self.mark_settings_dirty()
-        self.SetStatus(f"{self.route_action_name(route)} volume is now {route.volume} percent.")
+        self.SetStatus(f"{self.route_action_name(route)}, volume {route.volume} percent.")
+        self.refocus_action_button(event)
 
     def remove_route(self, _event: wx.CommandEvent) -> None:
         index = self.selected_index(self.route_list)
         if index < 0:
             self.SetStatus("No route selected.")
             return
+        removed = self.settings.routes[index]
         del self.settings.routes[index]
         self.populate_routes()
-        self.restore_list_selection(self.route_list, index)
+        self.restore_list_selection(self.route_list, index, focus_row=False)
         self.update_route_action_labels()
         self.mark_settings_dirty()
-        self.SetStatus("Route removed.")
+        self.SetStatus(f"Removed route {self.route_action_name(removed)}.")
+        self.refocus_action_button(_event)
 
     def endpoint_for_row(self, control: wx.ListCtrl, row: int) -> Endpoint | None:
         if row < 0:
@@ -980,7 +1091,7 @@ class ASIOAFrame(wx.Frame):
         name = control.GetItemText(row, 0)
         return next((item for item in self.settings.endpoints if item.name == name), None)
 
-    def toggle_endpoint(self, control: wx.ListCtrl, attr: str) -> None:
+    def toggle_endpoint(self, control: wx.ListCtrl, attr: str, event: wx.Event | None = None) -> None:
         endpoint = self.endpoint_for_row(control, self.selected_index(control))
         if endpoint is None:
             self.SetStatus("No endpoint selected.")
@@ -988,25 +1099,26 @@ class ASIOAFrame(wx.Frame):
         endpoint_name = endpoint.name
         setattr(endpoint, attr, not getattr(endpoint, attr))
         self.populate_endpoints()
-        self.restore_endpoint_selection(control, endpoint_name)
+        self.restore_endpoint_selection(control, endpoint_name, focus_row=False)
         self.update_endpoint_action_labels(control)
         self.mark_settings_dirty()
         if attr == "muted":
             state = "muted" if endpoint.muted else "unmuted"
-            self.SetStatus(f"{self.endpoint_action_name(endpoint)} is now {state}.")
+            self.SetStatus(f"{self.endpoint_action_name(endpoint)}, {state}.")
         elif attr == "monitor":
             state = "on" if endpoint.monitor else "off"
-            self.SetStatus(f"Monitoring for {self.endpoint_action_name(endpoint)} is now {state}.")
+            self.SetStatus(f"Monitoring for {self.endpoint_action_name(endpoint)}, {state}.")
         elif attr == "solo":
             state = "on" if endpoint.solo else "off"
-            self.SetStatus(f"Solo for {self.endpoint_action_name(endpoint)} is now {state}.")
+            self.SetStatus(f"Solo for {self.endpoint_action_name(endpoint)}, {state}.")
         elif attr == "enabled":
             state = "enabled" if endpoint.enabled else "disabled"
-            self.SetStatus(f"{self.endpoint_action_name(endpoint)} is now {state}.")
+            self.SetStatus(f"{self.endpoint_action_name(endpoint)}, {state}.")
         else:
             self.SetStatus(f"{endpoint.name} {attr.replace('_', ' ')} updated.")
+        self.refocus_action_button(event)
 
-    def adjust_endpoint_volume(self, control: wx.ListCtrl, delta: int) -> None:
+    def adjust_endpoint_volume(self, control: wx.ListCtrl, delta: int, event: wx.Event | None = None) -> None:
         endpoint = self.endpoint_for_row(control, self.selected_index(control))
         if endpoint is None:
             self.SetStatus("No endpoint selected.")
@@ -1014,10 +1126,11 @@ class ASIOAFrame(wx.Frame):
         endpoint_name = endpoint.name
         endpoint.volume = max(0, min(150, endpoint.volume + delta))
         self.populate_endpoints()
-        self.restore_endpoint_selection(control, endpoint_name)
+        self.restore_endpoint_selection(control, endpoint_name, focus_row=False)
         self.update_endpoint_action_labels(control)
         self.mark_settings_dirty()
-        self.SetStatus(f"{self.endpoint_action_name(endpoint)} volume is now {endpoint.volume} percent.")
+        self.SetStatus(f"{self.endpoint_action_name(endpoint)}, volume {endpoint.volume} percent.")
+        self.refocus_action_button(event)
 
     def collect_settings(self) -> None:
         for key, control in self.controls.items():
@@ -1031,27 +1144,91 @@ class ASIOAFrame(wx.Frame):
     def driver_package_path(self) -> Path:
         return resource_path("driver", "install-asioa-driver.ps1")
 
+    def driver_dll_package_path(self) -> Path:
+        return resource_path("driver", "ASIOA.Driver.dll")
+
+    def driver_marker_path(self) -> Path:
+        return SETTINGS_PATH.parent / "driver-installed.json"
+
+    def installed_driver_health(self) -> DriverHealth:
+        package_available = self.driver_package_path().exists() and self.driver_dll_package_path().exists()
+        marker_present = self.driver_marker_path().exists()
+        health = DriverHealth(package_available=package_available, marker_present=marker_present)
+        if winreg is None:
+            health.error = "Windows registry access is unavailable in this runtime."
+            return health
+        views = [0]
+        for view_name in ("KEY_WOW64_64KEY", "KEY_WOW64_32KEY"):
+            view = getattr(winreg, view_name, 0)
+            if view and view not in views:
+                views.append(view)
+        errors: list[str] = []
+        for view in views:
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, ASIOA_DRIVER_REGISTRY_PATH, 0, winreg.KEY_READ | view) as asio_key:
+                    clsid, _kind = winreg.QueryValueEx(asio_key, "CLSID")
+                clsid_key_path = rf"SOFTWARE\Classes\CLSID\{clsid}\InprocServer32"
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, clsid_key_path, 0, winreg.KEY_READ | view) as clsid_key:
+                    dll_path, _kind = winreg.QueryValueEx(clsid_key, None)
+                health.registered = True
+                health.dll_path = str(dll_path)
+                health.dll_exists = Path(str(dll_path)).exists()
+                if not health.dll_exists:
+                    health.error = f"Registered driver DLL was not found at {dll_path}."
+                return health
+            except OSError as exc:
+                errors.append(str(exc))
+        if marker_present and not health.registered:
+            health.error = "A previous install marker exists, but Windows ASIO registration was not found."
+        elif errors:
+            health.error = errors[-1]
+        return health
+
     def is_driver_installed(self) -> bool:
-        marker = SETTINGS_PATH.parent / "driver-installed.json"
-        return marker.exists()
+        return self.installed_driver_health().healthy
 
     def driver_status_lines(self) -> list[str]:
-        package = self.driver_package_path()
-        if self.is_driver_installed():
-            install_state = "The ASIOA system audio driver is marked as installed on this computer."
-        elif package.exists():
-            install_state = "The ASIOA system audio driver package is available and ready to install."
+        health = self.installed_driver_health()
+        if health.healthy:
+            install_state = "The ASIOA system audio driver is installed, registered with Windows ASIO, and the registered driver DLL is present."
+        elif health.registered and not health.dll_exists:
+            install_state = "The ASIOA driver registration exists, but the registered DLL is missing. Repair the driver before using it system-wide."
+        elif health.package_available:
+            install_state = "The ASIOA system audio driver package is available for install or repair."
         else:
             install_state = "The ASIOA control panel is installed. The signed system audio driver package is not bundled with this build yet."
-        return [
+        lines = [
             install_state,
-            f"Driver install preference: {self.settings.driver_install_option}.",
             "ASIOA Native driver is the target mode for system-wide routing through ASIO, ASIO4ALL-compatible devices, and future per-application capture.",
             "Until the signed driver is installed, miniaudio, WASAPI, PortAudio, JACK, and ASIO4ALL compatibility modes remain available for control-panel configuration and testing.",
         ]
+        if health.dll_path:
+            lines.append(f"Registered driver DLL: {health.dll_path}.")
+        if health.error and not health.healthy:
+            lines.append(f"Driver health note: {health.error}")
+        return lines
+
+    def update_driver_action_visibility(self) -> None:
+        if self.driver_action_button is None:
+            return
+        health = self.installed_driver_health()
+        if health.healthy:
+            self.driver_action_button.Hide()
+            self.driver_action_button.SetLabel("ASIOA audio driver installed and healthy")
+            self.driver_action_button.SetName("ASIOA audio driver installed and healthy")
+        elif health.package_available:
+            self.driver_action_button.Show()
+            label = "Install or repair ASIOA audio driver"
+            self.driver_action_button.SetLabel(label)
+            self.driver_action_button.SetName(label)
+        else:
+            self.driver_action_button.Hide()
+            self.driver_action_button.SetLabel("ASIOA audio driver package not bundled")
+            self.driver_action_button.SetName("ASIOA audio driver package not bundled")
+        self.driver_action_button.GetParent().Layout()
 
     def show_driver_install_alert_if_needed(self) -> None:
-        if self.is_driver_installed():
+        if self.installed_driver_health().healthy:
             return
         if self.settings.driver_install_prompt_dismissed:
             return
@@ -1073,6 +1250,11 @@ class ASIOAFrame(wx.Frame):
             self.SetStatus("Driver installation deferred. Use the Overview or Devices tab when you are ready.")
 
     def install_or_repair_driver(self) -> None:
+        health = self.installed_driver_health()
+        if health.healthy:
+            self.SetStatus("ASIOA system driver is already installed and healthy. No repair is needed.")
+            self.update_driver_action_visibility()
+            return
         package = self.driver_package_path()
         if not package.exists():
             self.SetStatus("ASIOA system driver package is not bundled with this build yet. The control panel remains available.")
@@ -1095,6 +1277,7 @@ class ASIOAFrame(wx.Frame):
         try:
             subprocess.Popen(command, shell=False)
             self.SetStatus("ASIOA driver installer launched. Follow the installer prompts and restart audio applications after it finishes.")
+            wx.CallLater(3000, self.update_driver_action_visibility)
             self.play_sound("notification")
         except OSError as exc:
             self.SetStatus(f"Could not launch ASIOA driver installer: {exc}.")
@@ -1107,7 +1290,6 @@ class ASIOAFrame(wx.Frame):
             "buffer_size",
             "minimum_buffer",
             "maximum_buffer",
-            "driver_install_option",
         }
         try:
             saved = json.loads(SETTINGS_PATH.read_text(encoding="utf-8")) if SETTINGS_PATH.exists() else {}
@@ -1502,6 +1684,7 @@ class ASIOAFrame(wx.Frame):
             return
         self._last_overview_html = html
         self.overview_view.SetPage(html, "")
+        self.update_driver_action_visibility()
 
     def startup_summary(self) -> str:
         route_count = len(self.settings.routes)
@@ -1548,6 +1731,9 @@ class ASIOAFrame(wx.Frame):
         self.status_text.SetLabel(f"Status: {message}")
         self.status_text.SetName(f"Status: {message}")
         self.append_status_history(message)
+        if message != self._last_announced_status:
+            self._last_announced_status = message
+            ScreenReaderNotifier.announce(message)
 
     def append_status_history(self, message: str) -> None:
         timestamp = wx.DateTime.Now().FormatISOTime()
