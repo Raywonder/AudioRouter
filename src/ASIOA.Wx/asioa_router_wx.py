@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - non-Windows dev/test environments.
 
 
 APP_NAME = "ASIOA Audio Router"
-APP_VERSION = "0.2.4"
+APP_VERSION = "0.2.5"
 CHANNEL_COUNT = 68
 CHANNEL_PAIRS = [f"{left}-{left + 1}" for left in range(1, CHANNEL_COUNT, 2)]
 

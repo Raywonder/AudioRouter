@@ -1,5 +1,5 @@
 #define MyAppName "ASIOA Audio Router"
-#define MyAppVersion "0.2.4"
+#define MyAppVersion "0.2.5"
 #define MyAppPublisher "Raywonder"
 #define MyAppExeName "ASIOA Audio Router.exe"
 #define SourceRoot "E:\Builds\asioa-audio-router\publish"
@@ -14,7 +14,7 @@ DefaultGroupName=ASIOA Audio Router
 DisableProgramGroupPage=yes
 LicenseFile=..\EULA.txt
 OutputDir=E:\Downloads\asioa-audio-router
-OutputBaseFilename=ASIOA-Audio-Router-Setup-0.2.4
+OutputBaseFilename=ASIOA-Audio-Router-Setup-0.2.5
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

@@ -14,6 +14,7 @@ $solution = Join-Path $root "asioa-audio-router.sln"
 $appProject = Join-Path $root "src\ASIOA.App\ASIOA.App.csproj"
 $wxProject = Join-Path $root "src\ASIOA.Wx"
 $installerScript = Join-Path $root "installer\ASIOA-Audio-Router.iss"
+$nativeDriverBuild = Join-Path $root "scripts\build-native-driver.ps1"
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 $python = "py"
 $pythonSelector = "-V:Astral/CPython3.12.12"
@@ -34,6 +35,7 @@ Get-ChildItem $OutputDir -File -ErrorAction SilentlyContinue |
 
 dotnet build $solution -c $Configuration
 dotnet publish $appProject -c $Configuration -r win-x64 --self-contained true -o (Join-Path $PublishDir "wpf-secondary")
+& $nativeDriverBuild -Configuration $Configuration -PublishDriverDir (Join-Path $PublishDir "driver")
 
 Push-Location $wxProject
 try {
@@ -59,7 +61,7 @@ if (Test-Path $PublishDir) {
 Copy-Item -Path (Join-Path $wxAppDir "*") -Destination $PublishDir -Recurse -Force
 & $iscc $installerScript
 
-$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.4.zip"
+$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.5.zip"
 Compress-Archive -Path (Join-Path $PublishDir "*") -DestinationPath $portableZip -Force
 
 $checksumsPath = Join-Path $OutputDir "SHA256SUMS.txt"

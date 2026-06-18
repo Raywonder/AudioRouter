@@ -1,3 +1,17 @@
+# ASIOA Audio Router 0.2.5
+
+This build is packaged for hands-on local driver testing, not only control-panel preview.
+
+## Added
+
+- The release build now rebuilds and stages the native ASIOA driver package before creating the installer and portable zip.
+- The installer and portable artifact names now use version 0.2.5 so this build is clearly newer than the previous 0.2.4 package.
+- The packaged driver folder includes `ASIOA.Driver.dll`, `install-asioa-driver.ps1`, and `uninstall-asioa-driver.ps1` when the native build succeeds.
+
+## Changed
+
+- Public driver signing is still a separate requirement, but this package now includes the local registerable driver payload needed for hands-on DAW/app detection tests on this machine.
+
 # ASIOA Audio Router 0.2.4
 
 This hotfix improves keyboard focus, default routing policy, monitoring-device setup, and driver-install prompting.
