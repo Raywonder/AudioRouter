@@ -31,6 +31,7 @@ APP_VERSION = "0.2.7"
 CHANNEL_COUNT = 68
 CHANNEL_PAIRS = [f"{left}-{left + 1}" for left in range(1, CHANNEL_COUNT, 2)]
 UPDATE_MANIFEST_URLS = [
+    "https://tappedin.fm/downloads/asioa/latest.json",
     "https://raw.githubusercontent.com/Raywonder/AudioRouter/main/updates/latest.json",
     "https://git.tappedin.fm/raywonder/audiorouter/raw/branch/main/updates/latest.json",
 ]
@@ -2048,9 +2049,9 @@ class ASIOAFrame(wx.Frame):
 
     def update_manifest_urls(self) -> list[str]:
         if self.settings.update_source == "GitHub only":
-            return [UPDATE_MANIFEST_URLS[0]]
-        if self.settings.update_source == "Gitea only when available":
             return [UPDATE_MANIFEST_URLS[1]]
+        if self.settings.update_source == "Gitea only when available":
+            return [UPDATE_MANIFEST_URLS[2]]
         if self.settings.update_source == "Both must match":
             return UPDATE_MANIFEST_URLS
         return UPDATE_MANIFEST_URLS
