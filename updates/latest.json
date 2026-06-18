@@ -1,0 +1,9 @@
+{
+  "app": "ASIOA Audio Router",
+  "version": "0.2.6",
+  "channel": "Stable",
+  "notes": "ASIOA 0.2.6 improves routing focus, system audio endpoint mapping, plug-in rack controls, Overview tab focus behavior, and update checking.",
+  "installerUrl": "https://github.com/Raywonder/AudioRouter/releases/download/v0.2.6/ASIOA-Audio-Router-Setup-0.2.6.exe",
+  "portableUrl": "https://github.com/Raywonder/AudioRouter/releases/download/v0.2.6/ASIOA-Audio-Router-win-x64-portable-0.2.6.zip",
+  "pageUrl": "https://github.com/Raywonder/AudioRouter/releases/tag/v0.2.6"
+}

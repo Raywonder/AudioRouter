@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 import threading
+import urllib.request
+from urllib.parse import unquote, urlparse
 import webbrowser
 import ctypes
 import winsound
@@ -25,9 +27,13 @@ except ImportError:  # pragma: no cover - non-Windows dev/test environments.
 
 
 APP_NAME = "ASIOA Audio Router"
-APP_VERSION = "0.2.5"
+APP_VERSION = "0.2.6"
 CHANNEL_COUNT = 68
 CHANNEL_PAIRS = [f"{left}-{left + 1}" for left in range(1, CHANNEL_COUNT, 2)]
+UPDATE_MANIFEST_URLS = [
+    "https://raw.githubusercontent.com/Raywonder/AudioRouter/main/updates/latest.json",
+    "https://git.tappedin.fm/raywonder/audiorouter/raw/branch/main/updates/latest.json",
+]
 
 
 def app_data_dir() -> Path:
@@ -90,6 +96,59 @@ AUTOSAVE_DELAY_MS = 3000
 ASIOA_DRIVER_REGISTRY_PATH = r"SOFTWARE\ASIO\ASIOA Audio Router"
 
 
+def discover_windows_audio_devices() -> list[str]:
+    if os.name != "nt":
+        return []
+    try:
+        command = [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Get-CimInstance Win32_SoundDevice | Where-Object { $_.Name } | Select-Object -ExpandProperty Name",
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=8, check=False)
+    except Exception:
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in (result.stdout or "").splitlines():
+        name = line.strip()
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        names.append(name)
+    return names
+
+
+def compare_versions(left: str, right: str) -> int:
+    def parts(value: str) -> list[int]:
+        result: list[int] = []
+        for token in value.replace("-", ".").replace("_", ".").split("."):
+            digits = "".join(ch for ch in token if ch.isdigit())
+            result.append(int(digits or "0"))
+        return result
+
+    left_parts = parts(left)
+    right_parts = parts(right)
+    max_len = max(len(left_parts), len(right_parts))
+    left_parts.extend([0] * (max_len - len(left_parts)))
+    right_parts.extend([0] * (max_len - len(right_parts)))
+    if left_parts == right_parts:
+        return 0
+    return 1 if left_parts > right_parts else -1
+
+
+def filename_from_url(url: str, fallback: str) -> str:
+    try:
+        parsed = urlparse(url)
+        name = unquote(Path(parsed.path).name)
+        return name or fallback
+    except Exception:
+        return fallback
+
+
 @dataclass(slots=True)
 class PluginInventory:
     vst3: int = 0
@@ -126,6 +185,20 @@ class DriverHealth:
     @property
     def needs_repair(self) -> bool:
         return not self.healthy
+
+
+@dataclass(slots=True)
+class UpdateInfo:
+    version: str
+    channel: str
+    notes: str
+    installer_url: str
+    portable_url: str
+    page_url: str = ""
+
+    @property
+    def has_download(self) -> bool:
+        return bool(self.installer_url or self.portable_url)
 
 
 @dataclass(slots=True)
@@ -186,6 +259,8 @@ class EffectSlot:
     enabled: bool = False
     bypassed: bool = True
     wet: int = 100
+    path: str = ""
+    parameters: dict[str, int] = field(default_factory=dict)
 
     def row(self) -> list[str]:
         return [
@@ -195,6 +270,7 @@ class EffectSlot:
             "enabled" if self.enabled else "disabled",
             "bypassed" if self.bypassed else "active",
             f"wet mix {self.wet} percent",
+            self.path or "Bundled or not selected",
         ]
 
 
@@ -277,6 +353,7 @@ class Settings:
         for name, endpoint in required.items():
             if name not in existing:
                 self.endpoints.append(endpoint)
+        self.ensure_windows_audio_devices()
         for endpoint in self.endpoints:
             if "sessionwire" in endpoint.name.lower() and self.sessionwire_white_noise_guard:
                 endpoint.white_noise_guard = True
@@ -295,6 +372,22 @@ class Settings:
                     route.muted = True
                     route.monitor = False
 
+    def ensure_windows_audio_devices(self) -> None:
+        existing = {endpoint.name for endpoint in self.endpoints}
+        for device_name in discover_windows_audio_devices():
+            output_name = f"Windows output: {device_name}"
+            input_name = f"Windows input: {device_name}"
+            if output_name not in existing:
+                self.endpoints.append(
+                    Endpoint(output_name, "System playback device", "1-2", monitor=True, role="Windows audio device")
+                )
+                existing.add(output_name)
+            if input_name not in existing:
+                self.endpoints.append(
+                    Endpoint(input_name, "System recording device", "1-2", monitor=False, muted=True, volume=0, role="Windows audio device input")
+                )
+                existing.add(input_name)
+
     @staticmethod
     def load() -> "Settings":
         defaults = Settings.defaults()
@@ -308,6 +401,7 @@ class Settings:
             except Exception:
                 pass
         if not SETTINGS_PATH.exists():
+            defaults.ensure_core_audio_policy()
             return defaults
         try:
             raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
@@ -334,12 +428,77 @@ class Settings:
         SETTINGS_PATH.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
 
 
+class PluginControlsDialog(wx.Dialog):
+    def __init__(self, parent: wx.Window, effect: EffectSlot, targets: list[str]) -> None:
+        super().__init__(parent, title=f"{effect.name} controls", size=(560, 520))
+        self.effect = effect
+        self.parameter_sliders: dict[str, wx.Slider] = {}
+        panel = wx.Panel(self)
+        root = wx.BoxSizer(wx.VERTICAL)
+        panel.SetSizer(root)
+
+        root.Add(wx.StaticText(panel, label=f"Plug-in: {effect.name}"), 0, wx.ALL, 6)
+        root.Add(wx.StaticText(panel, label=f"Format: {effect.fmt}"), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        path_text = wx.TextCtrl(panel, value=effect.path or "No plug-in file selected for this default rack slot.", style=wx.TE_READONLY)
+        path_text.SetName("Plug-in file path")
+        root.Add(path_text, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+        root.Add(wx.StaticText(panel, label="Target route or bus:"), 0, wx.LEFT | wx.RIGHT | wx.TOP, 6)
+        self.target_choice = wx.Choice(panel, choices=targets or [effect.target])
+        if effect.target in (targets or []):
+            self.target_choice.SetStringSelection(effect.target)
+        elif self.target_choice.GetCount():
+            self.target_choice.SetSelection(0)
+        root.Add(self.target_choice, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+        self.enabled_checkbox = wx.CheckBox(panel, label=f"Enable {effect.name}")
+        self.enabled_checkbox.SetValue(effect.enabled)
+        root.Add(self.enabled_checkbox, 0, wx.ALL, 6)
+
+        self.bypass_checkbox = wx.CheckBox(panel, label=f"Bypass {effect.name}")
+        self.bypass_checkbox.SetValue(effect.bypassed)
+        root.Add(self.bypass_checkbox, 0, wx.ALL, 6)
+
+        params = ASIOAFrame.effect_parameters(effect)
+        for name, value in params.items():
+            root.Add(wx.StaticText(panel, label=f"{name} percent:"), 0, wx.LEFT | wx.RIGHT | wx.TOP, 6)
+            slider = wx.Slider(panel, value=max(0, min(100, int(value))), minValue=0, maxValue=100, style=wx.SL_HORIZONTAL | wx.SL_LABELS)
+            slider.SetName(f"{effect.name} {name} control")
+            self.parameter_sliders[name] = slider
+            root.Add(slider, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+        note = wx.TextCtrl(
+            panel,
+            value=(
+                "This is ASIOA's accessible rack control surface. It stores parameters for the selected plug-in and exposes them to the audio engine. "
+                "Native vendor editor windows can be added later when the plug-in host can safely wrap them for screen readers."
+            ),
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_WORDWRAP,
+        )
+        note.SetMinSize((-1, 90))
+        root.Add(note, 0, wx.EXPAND | wx.ALL, 6)
+
+        buttons = self.CreateSeparatedButtonSizer(wx.OK | wx.CANCEL)
+        if buttons:
+            root.Add(buttons, 0, wx.EXPAND | wx.ALL, 6)
+
+    def apply_to_effect(self) -> None:
+        self.effect.target = self.target_choice.GetStringSelection() or self.effect.target
+        self.effect.enabled = self.enabled_checkbox.GetValue()
+        self.effect.bypassed = self.bypass_checkbox.GetValue()
+        self.effect.parameters = {name: slider.GetValue() for name, slider in self.parameter_sliders.items()}
+        if "Mix" in self.effect.parameters:
+            self.effect.wet = self.effect.parameters["Mix"]
+
+
 class ASIOAFrame(wx.Frame):
     def __init__(self) -> None:
         super().__init__(None, title=f"{APP_NAME} {APP_VERSION}", size=(1120, 780))
         self.settings = Settings.load()
         self.plugin_inventory = PluginInventory()
         self._plugin_scan_running = False
+        self._update_check_running = False
+        self._pending_overview_refresh = False
         self.status_text: wx.StaticText
         self.overview_view: wx.html2.WebView | wx.TextCtrl
         self.notebook: wx.Notebook
@@ -347,7 +506,10 @@ class ASIOAFrame(wx.Frame):
         self.input_list: wx.ListCtrl
         self.output_list: wx.ListCtrl
         self.effects_list: wx.ListCtrl
+        self.plugin_param_list: wx.ListCtrl
         self.driver_action_button: wx.Button | None = None
+        self.route_source_choice: wx.Choice | None = None
+        self.route_destination_choice: wx.Choice | None = None
         self.controls: dict[str, wx.Window] = {}
         self.route_action_buttons: dict[str, wx.Button] = {}
         self.endpoint_action_buttons: dict[int, dict[str, wx.Button]] = {}
@@ -363,6 +525,7 @@ class ASIOAFrame(wx.Frame):
         self.tray_icon: ASIOATrayIcon | None = None
         self._build_menu()
         self._build_ui()
+        self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_notebook_page_changed)
         self._build_tray_icon()
         self._bind_shortcuts()
         self._bind_autosave_events()
@@ -381,6 +544,8 @@ class ASIOAFrame(wx.Frame):
         self.update_overview()
         self.announce_startup_status()
         wx.CallAfter(self.start_plugin_scan)
+        if self.settings.auto_check_updates:
+            wx.CallLater(4500, lambda: self.check_for_updates(auto=True))
         self.play_sound("ready")
         self.Bind(wx.EVT_CLOSE, self.on_close)
 
@@ -485,6 +650,22 @@ class ASIOAFrame(wx.Frame):
 
     def _add_routing_tab(self) -> None:
         panel, sizer = self._new_tab("Routing")
+        choice_row = wx.BoxSizer(wx.HORIZONTAL)
+        source_box = wx.BoxSizer(wx.VERTICAL)
+        source_box.Add(wx.StaticText(panel, label="Route source:"), 0, wx.BOTTOM, 2)
+        self.route_source_choice = wx.Choice(panel, choices=self.route_endpoint_choices())
+        if self.route_source_choice.GetCount():
+            self.route_source_choice.SetSelection(0)
+        source_box.Add(self.route_source_choice, 0, wx.EXPAND)
+        destination_box = wx.BoxSizer(wx.VERTICAL)
+        destination_box.Add(wx.StaticText(panel, label="Route destination:"), 0, wx.BOTTOM, 2)
+        self.route_destination_choice = wx.Choice(panel, choices=self.route_endpoint_choices())
+        if self.route_destination_choice.GetCount():
+            self.route_destination_choice.SetSelection(0)
+        destination_box.Add(self.route_destination_choice, 0, wx.EXPAND)
+        choice_row.Add(source_box, 1, wx.RIGHT, 8)
+        choice_row.Add(destination_box, 1, wx.RIGHT, 8)
+        sizer.Add(choice_row, 0, wx.EXPAND | wx.ALL, 6)
         self.route_list = self._make_list(
             panel,
             ["Source", "Destination", "Enabled", "Mute state", "Monitoring", "Volume"],
@@ -495,7 +676,7 @@ class ASIOAFrame(wx.Frame):
         self.route_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda _event: self.update_route_action_labels())
         buttons = wx.BoxSizer(wx.HORIZONTAL)
         for key, label, handler in [
-            ("add", "Add safe route", self.add_safe_route),
+            ("add", "Add selected route", self.add_selected_route),
             ("mute", "Select a route to mute or unmute it", self.toggle_route_mute),
             ("volume_down", "Select a route to lower its volume 5 percent", lambda event: self.adjust_route_volume(-5, event)),
             ("volume_up", "Select a route to raise its volume 5 percent", lambda event: self.adjust_route_volume(5, event)),
@@ -517,6 +698,7 @@ class ASIOAFrame(wx.Frame):
             panel,
             ["Name", "Kind", "Channels", "Role", "Enabled", "Monitoring", "Solo state", "Mute state", "Volume", "Buffer", "Noise guard"],
             "Input endpoints",
+            checkboxes=True,
         )
         sizer.Add(self.input_list, 1, wx.EXPAND | wx.ALL, 6)
         self._add_endpoint_actions(panel, sizer, self.input_list)
@@ -530,6 +712,7 @@ class ASIOAFrame(wx.Frame):
             panel,
             ["Name", "Kind", "Channels", "Role", "Enabled", "Monitoring", "Solo state", "Mute state", "Volume", "Buffer", "Noise guard"],
             "Output endpoints and DAW returns",
+            checkboxes=True,
         )
         sizer.Add(self.output_list, 1, wx.EXPAND | wx.ALL, 6)
         self._add_endpoint_actions(panel, sizer, self.output_list)
@@ -613,8 +796,27 @@ class ASIOAFrame(wx.Frame):
         self.controls["vst3_enabled"] = self._add_checkbox(panel, sizer, "Enable VST3 effects", self.settings.vst3_enabled)
         self.controls["clap_enabled"] = self._add_checkbox(panel, sizer, "Enable CLAP effects", self.settings.clap_enabled)
         self.controls["vst2_enabled"] = self._add_checkbox(panel, sizer, "Enable legacy VST2 effects", self.settings.vst2_enabled)
-        self.effects_list = self._make_list(panel, ["Effect", "Format", "Target", "Enabled", "State", "Wet"], "Live effects slots")
+        self.effects_list = self._make_list(panel, ["Effect", "Format", "Target", "Enabled", "State", "Wet", "Path"], "Live effects slots")
         sizer.Add(self.effects_list, 1, wx.EXPAND | wx.ALL, 6)
+        self.effects_list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda event: self.on_effect_list_selection(event))
+        effects_buttons = wx.BoxSizer(wx.HORIZONTAL)
+        for label, handler in [
+            ("Add plug-in to rack", self.add_plugin_to_rack),
+            ("Open selected plug-in controls", self.open_selected_plugin_controls),
+            ("Toggle selected plug-in bypass", self.toggle_selected_plugin_bypass),
+            ("Remove selected plug-in from rack", self.remove_selected_plugin),
+        ]:
+            button = wx.Button(panel, label=label)
+            button.Bind(wx.EVT_BUTTON, handler)
+            button.Bind(wx.EVT_SET_FOCUS, lambda event, list_control=self.effects_list: self.on_action_button_focus(event, list_control))
+            effects_buttons.Add(button, 0, wx.RIGHT, 6)
+        sizer.Add(effects_buttons, 0, wx.ALL, 6)
+        self.plugin_param_list = self._make_list(
+            panel,
+            ["Parameter", "Value", "Control type"],
+            "Selected plug-in accessible parameters",
+        )
+        sizer.Add(self.plugin_param_list, 0, wx.EXPAND | wx.ALL, 6)
         self.populate_effects()
 
     def _add_accessibility_tab(self) -> None:
@@ -713,6 +915,20 @@ class ASIOAFrame(wx.Frame):
         self.notebook.AddPage(panel, name)
         return panel, sizer
 
+    def current_tab_name(self) -> str:
+        if not hasattr(self, "notebook"):
+            return ""
+        index = self.notebook.GetSelection()
+        if index == wx.NOT_FOUND:
+            return ""
+        return self.notebook.GetPageText(index)
+
+    def on_notebook_page_changed(self, event: wx.BookCtrlEvent) -> None:
+        if self.current_tab_name() == "Overview" and self._pending_overview_refresh:
+            self._pending_overview_refresh = False
+            wx.CallAfter(lambda: self.update_overview(force=True))
+        event.Skip()
+
     def _add_choice(self, panel: wx.Panel, sizer: wx.BoxSizer, label: str, choices: list[str], value: str) -> wx.Choice:
         text = wx.StaticText(panel, label=label)
         choice = wx.Choice(panel, choices=choices)
@@ -744,17 +960,17 @@ class ASIOAFrame(wx.Frame):
         text.SetMinSize((-1, 76))
         sizer.Add(text, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
-    def _make_list(self, parent: wx.Window, columns: list[str], name: str) -> wx.ListCtrl:
+    def _make_list(self, parent: wx.Window, columns: list[str], name: str, checkboxes: bool = False) -> wx.ListCtrl:
         control = wx.ListCtrl(parent, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         control.SetName(name)
-        if hasattr(control, "EnableCheckBoxes"):
+        if checkboxes and hasattr(control, "EnableCheckBoxes"):
             control.EnableCheckBoxes(True)
         for index, column in enumerate(columns):
             control.InsertColumn(index, column, width=wx.LIST_AUTOSIZE_USEHEADER)
         control.Bind(wx.EVT_SET_FOCUS, lambda event, list_control=control: self.on_list_focus(event, list_control))
-        if hasattr(wx, "EVT_LIST_ITEM_CHECKED"):
+        if checkboxes and hasattr(wx, "EVT_LIST_ITEM_CHECKED"):
             control.Bind(wx.EVT_LIST_ITEM_CHECKED, self.on_list_item_checked)
-        if hasattr(wx, "EVT_LIST_ITEM_UNCHECKED"):
+        if checkboxes and hasattr(wx, "EVT_LIST_ITEM_UNCHECKED"):
             control.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self.on_list_item_checked)
         return control
 
@@ -784,9 +1000,32 @@ class ASIOAFrame(wx.Frame):
         choices = [
             endpoint.name
             for endpoint in self.settings.endpoints
-            if endpoint.kind in {"Default monitoring output", "DAW return", "Virtual bus"} or endpoint.monitor
+            if endpoint.kind in {"Default monitoring output", "DAW return", "Virtual bus", "System playback device"} or endpoint.monitor
         ]
         return choices or ["Main output 1/2"]
+
+    def route_endpoint_choices(self) -> list[str]:
+        choices = [endpoint.name for endpoint in self.settings.endpoints]
+        return choices or ["Main output 1/2"]
+
+    @staticmethod
+    def is_feedback_risk(source: str, destination: str) -> bool:
+        source_l = source.lower()
+        destination_l = destination.lower()
+        master_source = "main output 1/2" in source_l or "daw master" in source_l or "output 1/2" in source_l
+        capture_destination = "system audio capture 1/2" in destination_l or "capture a" in destination_l or "input 1/2" in destination_l
+        return master_source and capture_destination
+
+    @staticmethod
+    def set_choice_items(choice: wx.Choice | None, values: list[str], preferred: str | None = None) -> None:
+        if choice is None:
+            return
+        current = preferred or choice.GetStringSelection()
+        choice.Set(values)
+        if current in values:
+            choice.SetStringSelection(current)
+        elif values:
+            choice.SetSelection(0)
 
     def on_list_focus(self, event: wx.FocusEvent, control: wx.ListCtrl) -> None:
         self.ensure_list_selection(control)
@@ -808,6 +1047,11 @@ class ASIOAFrame(wx.Frame):
     def on_endpoint_list_selection(self, event: wx.ListEvent, control: wx.ListCtrl) -> None:
         self.remember_list_selection(control, event.GetIndex())
         self.update_endpoint_action_labels(control)
+        event.Skip()
+
+    def on_effect_list_selection(self, event: wx.ListEvent) -> None:
+        self.remember_list_selection(self.effects_list, event.GetIndex())
+        self.populate_plugin_parameters()
         event.Skip()
 
     def remember_list_selection(self, control: wx.ListCtrl, index: int) -> None:
@@ -862,8 +1106,8 @@ class ASIOAFrame(wx.Frame):
     def populate_endpoints(self) -> None:
         self._populating_lists = True
         for control, predicate in [
-            (getattr(self, "input_list", None), lambda item: item.kind != "DAW return"),
-            (getattr(self, "output_list", None), lambda item: item.kind in {"Default monitoring output", "DAW return", "Virtual bus"}),
+            (getattr(self, "input_list", None), lambda item: item.kind in {"Application or physical input", "Application", "Physical input", "System recording device"}),
+            (getattr(self, "output_list", None), lambda item: item.kind in {"Default monitoring output", "DAW return", "Virtual bus", "System playback device"}),
         ]:
             if control is None:
                 continue
@@ -881,6 +1125,21 @@ class ASIOAFrame(wx.Frame):
             row = self._append_row(self.effects_list, effect.row())
             self._check_list_row(self.effects_list, row, effect.enabled)
         self._populating_lists = False
+        self.ensure_list_selection(self.effects_list)
+        self.populate_plugin_parameters()
+
+    def populate_plugin_parameters(self) -> None:
+        if not hasattr(self, "plugin_param_list"):
+            return
+        self.plugin_param_list.DeleteAllItems()
+        effect = self.selected_effect()
+        if effect is None:
+            self._append_row(self.plugin_param_list, ["No plug-in selected", "None", "Status"])
+            return
+        params = self.effect_parameters(effect)
+        for name, value in params.items():
+            self._append_row(self.plugin_param_list, [name, f"{value} percent", "Accessible slider"])
+        self.ensure_list_selection(self.plugin_param_list)
 
     @staticmethod
     def _append_row(control: wx.ListCtrl, values: list[str]) -> int:
@@ -946,6 +1205,25 @@ class ASIOAFrame(wx.Frame):
         if index < 0 or index >= len(self.settings.routes):
             return None
         return self.settings.routes[index]
+
+    def selected_effect(self) -> EffectSlot | None:
+        if not hasattr(self, "effects_list"):
+            return None
+        index = self.selected_index(self.effects_list)
+        if index < 0 or index >= len(self.settings.effects):
+            return None
+        return self.settings.effects[index]
+
+    @staticmethod
+    def effect_parameters(effect: EffectSlot) -> dict[str, int]:
+        if not effect.parameters:
+            effect.parameters = {
+                "Input gain": 100,
+                "Output gain": 100,
+                "Mix": effect.wet,
+                "Bypass": 100 if effect.bypassed else 0,
+            }
+        return effect.parameters
 
     def route_action_name(self, route: Route) -> str:
         return f"{route.source} to {route.destination}"
@@ -1034,13 +1312,31 @@ class ASIOAFrame(wx.Frame):
         if isinstance(window, wx.Window):
             wx.CallAfter(window.SetFocus)
 
-    def add_safe_route(self, _event: wx.CommandEvent) -> None:
-        self.settings.routes.append(Route("DAW cue return 3/4", "System audio capture 1/2", volume=85))
+    def add_selected_route(self, _event: wx.CommandEvent) -> None:
+        source = self.route_source_choice.GetStringSelection() if self.route_source_choice else "DAW cue return 3/4"
+        destination = self.route_destination_choice.GetStringSelection() if self.route_destination_choice else "System audio capture 1/2"
+        if not source or not destination:
+            self.SetStatus("Choose a route source and destination first.")
+            self.refocus_action_button(_event)
+            return
+        if source == destination:
+            self.SetStatus(f"Route not added. {source} cannot route to itself.")
+            self.refocus_action_button(_event)
+            return
+        if self.settings.protect_daw_master_feedback and self.is_feedback_risk(source, destination):
+            self.SetStatus(f"Route not added. Feedback guard blocked {source} to {destination}.")
+            self.refocus_action_button(_event)
+            return
+        if any(route.source == source and route.destination == destination for route in self.settings.routes):
+            self.SetStatus(f"Route already exists: {source} to {destination}.")
+            self.refocus_action_button(_event)
+            return
+        self.settings.routes.append(Route(source, destination, volume=100))
         self.populate_routes()
         self.restore_list_selection(self.route_list, len(self.settings.routes) - 1, focus_row=False)
         self.update_route_action_labels()
         self.mark_settings_dirty()
-        self.SetStatus("Added safe route from DAW cue return 3 and 4 to System audio capture 1 and 2.")
+        self.SetStatus(f"Added route {source} to {destination}.")
         self.refocus_action_button(_event)
 
     def toggle_route_mute(self, _event: wx.CommandEvent) -> None:
@@ -1084,6 +1380,110 @@ class ASIOAFrame(wx.Frame):
         self.mark_settings_dirty()
         self.SetStatus(f"Removed route {self.route_action_name(removed)}.")
         self.refocus_action_button(_event)
+
+    def add_plugin_to_rack(self, event: wx.CommandEvent) -> None:
+        wildcard = "Audio plug-ins (*.vst3;*.clap;*.dll)|*.vst3;*.clap;*.dll|VST3 plug-ins (*.vst3)|*.vst3|CLAP plug-ins (*.clap)|*.clap|Legacy VST2 DLLs (*.dll)|*.dll|All files (*.*)|*.*"
+        dialog = wx.FileDialog(
+            self,
+            "Choose a VST3, CLAP, or legacy VST2 plug-in",
+            wildcard=wildcard,
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        )
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.SetStatus("Add plug-in canceled.")
+                self.refocus_action_button(event)
+                return
+            path = Path(dialog.GetPath())
+        finally:
+            dialog.Destroy()
+        fmt = self.plugin_format_for_path(path)
+        if fmt == "VST2 legacy" and not self.settings.vst2_enabled:
+            self.SetStatus("Legacy VST2 plug-in not added because legacy VST2 support is disabled.")
+            self.refocus_action_button(event)
+            return
+        effect = EffectSlot(
+            path.stem,
+            fmt,
+            self.settings.default_monitor_device,
+            enabled=self.settings.live_effects_enabled,
+            bypassed=not self.settings.live_effects_enabled,
+            wet=100,
+            path=str(path),
+        )
+        self.settings.effects.append(effect)
+        self.populate_effects()
+        self.restore_list_selection(self.effects_list, len(self.settings.effects) - 1, focus_row=False)
+        self.populate_plugin_parameters()
+        self.mark_settings_dirty()
+        self.SetStatus(f"Added {effect.name}, {effect.fmt}, to the plug-in rack.")
+        self.refocus_action_button(event)
+
+    @staticmethod
+    def plugin_format_for_path(path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix == ".clap":
+            return "CLAP"
+        if suffix == ".vst3":
+            return "VST3"
+        if suffix == ".dll":
+            return "VST2 legacy"
+        return "Unknown plug-in"
+
+    def toggle_selected_plugin_bypass(self, event: wx.CommandEvent) -> None:
+        effect = self.selected_effect()
+        if effect is None:
+            self.SetStatus("No plug-in selected.")
+            self.refocus_action_button(event)
+            return
+        effect.bypassed = not effect.bypassed
+        effect.enabled = not effect.bypassed
+        self.effect_parameters(effect)["Bypass"] = 100 if effect.bypassed else 0
+        index = self.selected_index(self.effects_list)
+        self.populate_effects()
+        self.restore_list_selection(self.effects_list, index, focus_row=False)
+        self.mark_settings_dirty()
+        self.SetStatus(f"{effect.name}, {'bypassed' if effect.bypassed else 'active'}.")
+        self.refocus_action_button(event)
+
+    def remove_selected_plugin(self, event: wx.CommandEvent) -> None:
+        index = self.selected_index(self.effects_list)
+        if index < 0 or index >= len(self.settings.effects):
+            self.SetStatus("No plug-in selected.")
+            self.refocus_action_button(event)
+            return
+        effect = self.settings.effects[index]
+        if effect.name.startswith("No ") or effect.name == "Legacy VST2 disabled":
+            self.SetStatus(f"{effect.name} is a default rack slot and was not removed.")
+            self.refocus_action_button(event)
+            return
+        del self.settings.effects[index]
+        self.populate_effects()
+        self.restore_list_selection(self.effects_list, index, focus_row=False)
+        self.mark_settings_dirty()
+        self.SetStatus(f"Removed {effect.name} from the plug-in rack.")
+        self.refocus_action_button(event)
+
+    def open_selected_plugin_controls(self, event: wx.CommandEvent) -> None:
+        effect = self.selected_effect()
+        if effect is None:
+            self.SetStatus("No plug-in selected.")
+            self.refocus_action_button(event)
+            return
+        dialog = PluginControlsDialog(self, effect, self.route_endpoint_choices())
+        try:
+            if dialog.ShowModal() == wx.ID_OK:
+                dialog.apply_to_effect()
+                index = self.selected_index(self.effects_list)
+                self.populate_effects()
+                self.restore_list_selection(self.effects_list, index, focus_row=False)
+                self.mark_settings_dirty()
+                self.SetStatus(f"Updated controls for {effect.name}.")
+            else:
+                self.SetStatus(f"Closed controls for {effect.name} without changes.")
+        finally:
+            dialog.Destroy()
+        self.refocus_action_button(event)
 
     def endpoint_for_row(self, control: wx.ListCtrl, row: int) -> Endpoint | None:
         if row < 0:
@@ -1419,6 +1819,18 @@ class ASIOAFrame(wx.Frame):
         self.minimize_to_tray("ASIOA is still running in the system tray so audio routes stay active.")
 
     def refresh_devices(self) -> None:
+        previous_count = len(self.settings.endpoints)
+        self.settings.ensure_windows_audio_devices()
+        choices = self.route_endpoint_choices()
+        self.set_choice_items(self.route_source_choice, choices)
+        self.set_choice_items(self.route_destination_choice, choices)
+        monitor_control = self.controls.get("default_monitor_device")
+        if isinstance(monitor_control, wx.Choice):
+            self.set_choice_items(monitor_control, self.monitor_device_choices(), self.settings.default_monitor_device)
+        if len(self.settings.endpoints) != previous_count:
+            self.populate_endpoints()
+            self.mark_settings_dirty()
+            self.SetStatus(f"Audio device list updated. {len(self.settings.endpoints) - previous_count} new routable endpoint entries added.")
         self.update_overview()
 
     def on_device_timer(self, _event: wx.TimerEvent) -> None:
@@ -1555,11 +1967,109 @@ class ASIOAFrame(wx.Frame):
         else:
             self.SetStatus(f"Command recorded for engine: {command}.")
 
-    def check_for_updates(self) -> None:
-        self.SetStatus(
-            "Update check queued. GitHub is the primary update source until Gitea is reachable; matching GitHub and Gitea versions will be preferred when both are available."
-        )
+    def check_for_updates(self, auto: bool = False) -> None:
+        if self._update_check_running:
+            if not auto:
+                self.SetStatus("Update check is already running.")
+            return
+        self._update_check_running = True
+        if not auto:
+            self.SetStatus("Checking for ASIOA updates.")
+        thread = threading.Thread(target=self.update_check_worker, args=(auto,), name="ASIOAUpdateCheck", daemon=True)
+        thread.start()
+
+    def update_check_worker(self, auto: bool) -> None:
+        try:
+            update = self.fetch_update_manifest()
+            wx.CallAfter(self.finish_update_check, update, auto, "")
+        except Exception as exc:
+            wx.CallAfter(self.finish_update_check, None, auto, str(exc))
+
+    def fetch_update_manifest(self) -> UpdateInfo:
+        last_error = ""
+        for url in self.update_manifest_urls():
+            try:
+                with urllib.request.urlopen(url, timeout=12) as response:
+                    payload = response.read(512 * 1024)
+                data = json.loads(payload.decode("utf-8", errors="replace"))
+                return UpdateInfo(
+                    version=str(data.get("version", "") or data.get("appVersion", "") or data.get("tag", "")).lstrip("v"),
+                    channel=str(data.get("channel", "Stable")),
+                    notes=str(data.get("notes", "") or data.get("releaseNotes", "")),
+                    installer_url=str(data.get("installerUrl", "") or data.get("windowsInstallerUrl", "")),
+                    portable_url=str(data.get("portableUrl", "") or data.get("windowsPortableUrl", "")),
+                    page_url=str(data.get("pageUrl", "") or data.get("releaseUrl", "")),
+                )
+            except Exception as exc:
+                last_error = f"{url}: {exc}"
+        raise RuntimeError(last_error or "No update manifest could be read.")
+
+    def update_manifest_urls(self) -> list[str]:
+        if self.settings.update_source == "GitHub only":
+            return [UPDATE_MANIFEST_URLS[0]]
+        if self.settings.update_source == "Gitea only when available":
+            return [UPDATE_MANIFEST_URLS[1]]
+        if self.settings.update_source == "Both must match":
+            return UPDATE_MANIFEST_URLS
+        return UPDATE_MANIFEST_URLS
+
+    def finish_update_check(self, update: UpdateInfo | None, auto: bool, error: str) -> None:
+        self._update_check_running = False
+        if update is None:
+            if not auto:
+                self.SetStatus(f"Update check failed. {error}")
+                self.play_sound("error")
+            return
+        if not update.version:
+            if not auto:
+                self.SetStatus("Update manifest was read, but it did not include a version.")
+                self.play_sound("error")
+            return
+        if compare_versions(update.version, APP_VERSION) <= 0:
+            if not auto:
+                self.SetStatus(f"ASIOA is up to date. Installed {APP_VERSION}, latest {update.version}.")
+                self.play_sound("success")
+            return
+        if not update.has_download:
+            self.SetStatus(f"ASIOA {update.version} is available, but no Windows download URL was listed.")
+            self.play_sound("notification")
+            return
+        self.SetStatus(f"ASIOA {update.version} is available. Downloading update.")
         self.play_sound("notification")
+        threading.Thread(target=self.download_update_worker, args=(update, auto), name="ASIOAUpdateDownload", daemon=True).start()
+
+    def download_update_worker(self, update: UpdateInfo, auto: bool) -> None:
+        url = update.installer_url or update.portable_url
+        filename = filename_from_url(url, f"ASIOA-Audio-Router-Setup-{update.version}.exe")
+        target = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Downloads" / filename
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                target.write_bytes(response.read())
+            wx.CallAfter(self.finish_update_download, update, target, auto, "")
+        except Exception as exc:
+            wx.CallAfter(self.finish_update_download, update, target, auto, str(exc))
+
+    def finish_update_download(self, update: UpdateInfo, target: Path, auto: bool, error: str) -> None:
+        if error:
+            self.SetStatus(f"Could not download ASIOA {update.version}. {error}")
+            self.play_sound("error")
+            return
+        self.SetStatus(f"Downloaded ASIOA {update.version} to {target}.")
+        self.play_sound("success")
+        if target.suffix.lower() == ".exe":
+            message = (
+                f"ASIOA {update.version} has been downloaded.\n\n"
+                "Do you want to run the installer now? Audio routing may restart during installation."
+            )
+            if update.notes:
+                message += f"\n\nWhat's new:\n{update.notes[:1200]}"
+            answer = wx.MessageBox(message, "ASIOA update ready", wx.YES_NO | wx.ICON_INFORMATION, self)
+            if answer == wx.YES:
+                try:
+                    subprocess.Popen([str(target)], shell=False)
+                    self.SetStatus(f"Started ASIOA {update.version} installer.")
+                except Exception as exc:
+                    self.SetStatus(f"Downloaded update, but could not start installer. {exc}")
 
     def send_diagnostics_silently(self) -> None:
         if not self.settings.silent_diagnostics:
@@ -1676,8 +2186,12 @@ class ASIOAFrame(wx.Frame):
 </body>
 </html>"""
 
-    def update_overview(self) -> None:
+    def update_overview(self, force: bool = False) -> None:
         if not hasattr(self, "overview_view"):
+            return
+        if not force and self.current_tab_name() != "Overview":
+            self._pending_overview_refresh = True
+            self.update_driver_action_visibility()
             return
         html = self.render_overview_html()
         if html == self._last_overview_html:

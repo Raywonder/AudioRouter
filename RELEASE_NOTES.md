@@ -1,3 +1,21 @@
+# ASIOA Audio Router 0.2.6
+
+This hotfix cleans up routing and plug-in-rack accessibility so the control panel behaves more like a real audio router instead of a generic list editor.
+
+## Added
+
+- Windows sound devices discovered from the system are added as routable input and output endpoints, making them available in the Routing tab's source and destination selectors.
+- The Routing tab now has route source and destination combo boxes, plus an Add selected route button with feedback-loop protection.
+- The Live Effects rack now supports adding VST3, CLAP, and legacy VST2 files, removing selected plug-ins, toggling bypass, and opening an accessible ASIOA control dialog for the selected plug-in.
+- The selected plug-in controls dialog exposes target route, enabled state, bypass state, and accessible parameter sliders for values ASIOA stores and can hand to the engine.
+- Update checking now reads the ASIOA update manifest, compares installed vs latest version, downloads newer installers or portable packages to Downloads, and asks before launching an installer.
+
+## Changed
+
+- Checkboxes are now opt-in for list controls. Input and output endpoint lists keep row checkboxes because they represent device/channel enable state; routing and plug-in rack lists use explicit action buttons instead.
+- Input and output tabs now show more appropriate endpoint types instead of mixing every endpoint into the Inputs tab.
+- Overview WebView content now refreshes only while the Overview tab is active, preventing screen readers from being pulled back to Overview while the user is working in another tab.
+
 # ASIOA Audio Router 0.2.5
 
 This build is packaged for hands-on local driver testing, not only control-panel preview.
