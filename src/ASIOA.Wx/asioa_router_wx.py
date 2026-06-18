@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover - non-Windows dev/test environments.
 
 
 APP_NAME = "ASIOA Audio Router"
-APP_VERSION = "0.2.6"
+APP_VERSION = "0.2.7"
 CHANNEL_COUNT = 68
 CHANNEL_PAIRS = [f"{left}-{left + 1}" for left in range(1, CHANNEL_COUNT, 2)]
 UPDATE_MANIFEST_URLS = [
@@ -92,8 +92,10 @@ DRIVER_INSTALL_OPTIONS = [
     "Control panel only",
 ]
 PLUGIN_SCAN_INTERVAL_MS = 300000
-AUTOSAVE_DELAY_MS = 3000
+AUTOSAVE_DELAY_MS = 500
 ASIOA_DRIVER_REGISTRY_PATH = r"SOFTWARE\ASIO\ASIOA Audio Router"
+COMMUNICATION_BRIDGE_INPUT = "ASIOA Communication input 1/2"
+COMMUNICATION_BRIDGE_OUTPUT = "ASIOA Communication output 1/2"
 
 
 def discover_windows_audio_devices() -> list[str]:
@@ -322,6 +324,8 @@ class Settings:
     def defaults() -> "Settings":
         endpoints = [
             Endpoint("Main output 1/2", "Default monitoring output", "1-2", monitor=True, role="Master monitor"),
+            Endpoint(COMMUNICATION_BRIDGE_INPUT, "Windows communication bridge input", "1-2", monitor=False, muted=True, volume=0, role="Windows app input"),
+            Endpoint(COMMUNICATION_BRIDGE_OUTPUT, "Windows communication bridge output", "1-2", monitor=True, role="Windows app output"),
             Endpoint("System audio capture 1/2", "Application or physical input", "1-2", monitor=True, role="System audio"),
             Endpoint("Capture B 3/4", "Application", "3-4", role="Application capture"),
             Endpoint("Primary microphone 7/8", "Physical input", "7-8", monitor=False, muted=True, volume=0, role="Microphone"),
@@ -335,6 +339,8 @@ class Settings:
             Endpoint("Sessionwire output guard", "DAW return", "57-58", monitor=False, muted=True, role="Sessionwire", white_noise_guard=True),
         ]
         routes = [
+            Route(COMMUNICATION_BRIDGE_OUTPUT, "Main output 1/2", volume=100),
+            Route("System audio capture 1/2", COMMUNICATION_BRIDGE_INPUT, volume=100),
             Route("System audio capture 1/2", "Main output 1/2", volume=100),
             Route("Screen Reader Bus 61/62", "Main output 1/2", volume=100),
             Route("TTS Bus 63/64", "Main output 1/2", volume=100),
@@ -353,6 +359,8 @@ class Settings:
         for name, endpoint in required.items():
             if name not in existing:
                 self.endpoints.append(endpoint)
+                existing.add(name)
+        self.ensure_windows_bridge_pairs(existing)
         self.ensure_windows_audio_devices()
         for endpoint in self.endpoints:
             if "sessionwire" in endpoint.name.lower() and self.sessionwire_white_noise_guard:
@@ -387,6 +395,21 @@ class Settings:
                     Endpoint(input_name, "System recording device", "1-2", monitor=False, muted=True, volume=0, role="Windows audio device input")
                 )
                 existing.add(input_name)
+
+    def ensure_windows_bridge_pairs(self, existing: set[str]) -> None:
+        for pair in CHANNEL_PAIRS:
+            input_name = f"WDM/WASAPI bridge input {pair}"
+            output_name = f"WDM/WASAPI bridge output {pair}"
+            if input_name not in existing:
+                self.endpoints.append(
+                    Endpoint(input_name, "Windows bridge input pair", pair, monitor=False, muted=True, volume=0, role="Windows app input")
+                )
+                existing.add(input_name)
+            if output_name not in existing:
+                self.endpoints.append(
+                    Endpoint(output_name, "Windows bridge output pair", pair, monitor=True, role="Windows app output")
+                )
+                existing.add(output_name)
 
     @staticmethod
     def load() -> "Settings":
@@ -590,13 +613,32 @@ class ASIOAFrame(wx.Frame):
         self.SetAcceleratorTable(wx.AcceleratorTable(entries))
 
     def _bind_autosave_events(self) -> None:
-        for control in self.controls.values():
+        for key, control in self.controls.items():
             if isinstance(control, wx.Choice):
-                control.Bind(wx.EVT_CHOICE, lambda _event: self.mark_settings_dirty())
+                control.Bind(wx.EVT_CHOICE, lambda _event, control_key=key: self.on_control_changed(control_key))
             elif isinstance(control, wx.CheckBox):
-                control.Bind(wx.EVT_CHECKBOX, lambda _event: self.mark_settings_dirty())
+                control.Bind(wx.EVT_CHECKBOX, lambda _event, control_key=key: self.on_control_changed(control_key))
             elif isinstance(control, wx.Slider):
-                control.Bind(wx.EVT_SLIDER, lambda _event: self.mark_settings_dirty())
+                control.Bind(wx.EVT_SLIDER, lambda _event, control_key=key: self.on_control_changed(control_key))
+
+    def on_control_changed(self, key: str) -> None:
+        self.collect_settings()
+        self.mark_settings_dirty()
+        self.update_overview()
+        if key in {"monitor_volume", "dropout_recovery_ms", "sessionwire_noise_floor_db"}:
+            value = getattr(self.settings, key)
+            label = {
+                "monitor_volume": "Default monitor volume",
+                "dropout_recovery_ms": "Dropout recovery hold time",
+                "sessionwire_noise_floor_db": "Sessionwire white-noise guard threshold",
+            }.get(key, key.replace("_", " "))
+            unit = " percent" if key == "monitor_volume" else (" dB" if key.endswith("_db") else " milliseconds")
+            self.SetStatus(f"{label}, {value}{unit}.")
+        elif key in {"driver_mode", "smart_buffer_mode", "sample_rate", "buffer_size", "minimum_buffer", "maximum_buffer", "target_latency_ms", "jitter_safety_ms", "default_monitor_device", "system_audio_master_pair", "screen_reader_master_pair", "screen_reader_output", "update_source", "update_channel"}:
+            self.SetStatus(f"{key.replace('_', ' ').title()}, {getattr(self.settings, key)}.")
+        elif key in {"monitor_in_app", "bypass_to_daw", "auto_raise_on_dropouts", "auto_lower_when_stable", "protect_daw_master_feedback", "live_effects_enabled", "vst3_enabled", "clap_enabled", "vst2_enabled", "sessionwire_white_noise_guard", "enable_builtin_sounds", "auto_check_updates", "run_on_startup", "start_minimized", "keep_engine_active"}:
+            state = "on" if bool(getattr(self.settings, key)) else "off"
+            self.SetStatus(f"{key.replace('_', ' ').title()}, {state}.")
 
     def mark_settings_dirty(self) -> None:
         self._settings_dirty = True
@@ -1000,7 +1042,7 @@ class ASIOAFrame(wx.Frame):
         choices = [
             endpoint.name
             for endpoint in self.settings.endpoints
-            if endpoint.kind in {"Default monitoring output", "DAW return", "Virtual bus", "System playback device"} or endpoint.monitor
+            if endpoint.kind in {"Default monitoring output", "DAW return", "Virtual bus", "System playback device", "Windows communication bridge output", "Windows bridge output pair"} or endpoint.monitor
         ]
         return choices or ["Main output 1/2"]
 
@@ -1106,8 +1148,8 @@ class ASIOAFrame(wx.Frame):
     def populate_endpoints(self) -> None:
         self._populating_lists = True
         for control, predicate in [
-            (getattr(self, "input_list", None), lambda item: item.kind in {"Application or physical input", "Application", "Physical input", "System recording device"}),
-            (getattr(self, "output_list", None), lambda item: item.kind in {"Default monitoring output", "DAW return", "Virtual bus", "System playback device"}),
+            (getattr(self, "input_list", None), lambda item: item.kind in {"Application or physical input", "Application", "Physical input", "System recording device", "Windows communication bridge input", "Windows bridge input pair"}),
+            (getattr(self, "output_list", None), lambda item: item.kind in {"Default monitoring output", "DAW return", "Virtual bus", "System playback device", "Windows communication bridge output", "Windows bridge output pair"}),
         ]:
             if control is None:
                 continue
@@ -2216,6 +2258,8 @@ class ASIOAFrame(wx.Frame):
 
     def play_sound(self, event_name: str) -> None:
         if not self.settings.enable_builtin_sounds:
+            return
+        if self.IsShown() and not self.IsIconized():
             return
         sound_map = {
             "ready": "online.wav",

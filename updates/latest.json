@@ -1,9 +1,9 @@
 {
   "app": "ASIOA Audio Router",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "channel": "Stable",
-  "notes": "ASIOA 0.2.6 improves routing focus, system audio endpoint mapping, plug-in rack controls, Overview tab focus behavior, and update checking.",
-  "installerUrl": "https://github.com/Raywonder/AudioRouter/releases/download/v0.2.6/ASIOA-Audio-Router-Setup-0.2.6.exe",
-  "portableUrl": "https://github.com/Raywonder/AudioRouter/releases/download/v0.2.6/ASIOA-Audio-Router-win-x64-portable-0.2.6.zip",
-  "pageUrl": "https://github.com/Raywonder/AudioRouter/releases/tag/v0.2.6"
+  "notes": "ASIOA 0.2.7 adds a Windows-facing 2-in/2-out communication bridge model, WDM/WASAPI bridge pair routing choices, half-second autosave, real-time slider and setting updates, quieter in-UI sounds, and updater metadata that can be read from GitHub or Gitea while downloading from the canonical hosted path.",
+  "installerUrl": "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-Setup-0.2.7.exe",
+  "portableUrl": "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-win-x64-portable-0.2.7.zip",
+  "pageUrl": "https://github.com/Raywonder/AudioRouter"
 }

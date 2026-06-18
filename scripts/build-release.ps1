@@ -61,7 +61,7 @@ if (Test-Path $PublishDir) {
 Copy-Item -Path (Join-Path $wxAppDir "*") -Destination $PublishDir -Recurse -Force
 & $iscc $installerScript
 
-$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.6.zip"
+$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.7.zip"
 Compress-Archive -Path (Join-Path $PublishDir "*") -DestinationPath $portableZip -Force
 
 $checksumsPath = Join-Path $OutputDir "SHA256SUMS.txt"

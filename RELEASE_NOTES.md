@@ -1,3 +1,19 @@
+# ASIOA Audio Router 0.2.7
+
+This hotfix makes the control panel react faster and models the Windows-facing audio bridge more clearly for apps that need normal system audio endpoints.
+
+## Added
+
+- Adds the ASIOA Communication input/output 1/2 bridge as the default Windows-facing 2-in/2-out bus for apps that need a normal system audio endpoint.
+- Adds WDM/WASAPI bridge pair endpoints for ASIO channel pairs so routing can model which stereo pairs should become Windows-visible pairs when the native driver layer exposes them.
+- Keeps GitHub and Gitea manifest sources in the updater while public downloads come from the hosted ASIOA artifact path.
+
+## Changed
+
+- Settings autosave and hot-apply now run after half a second instead of three seconds.
+- Volume sliders, buffer controls, choices, and toggles update the running control model immediately and announce the changed value.
+- Built-in sounds stay quiet while the control panel is open; they are reserved for minimized/tray and close/save confirmation behavior.
+
 # ASIOA Audio Router 0.2.6
 
 This hotfix cleans up routing and plug-in-rack accessibility so the control panel behaves more like a real audio router instead of a generic list editor.
