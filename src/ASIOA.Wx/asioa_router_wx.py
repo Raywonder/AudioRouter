@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import wx
+import wx.adv
 import wx.html2
 
 
@@ -316,14 +317,19 @@ class ASIOAFrame(wx.Frame):
         self.route_action_buttons: dict[str, wx.Button] = {}
         self.endpoint_action_buttons: dict[int, dict[str, wx.Button]] = {}
         self._list_selection_memory: dict[int, int] = {}
+        self._force_exit = False
+        self._last_escape_at: datetime | None = None
         self._last_overview_html = ""
         self._settings_dirty = False
         self._last_saved_payload = ""
         self.status_history: list[str] = []
+        self.tray_icon: ASIOATrayIcon | None = None
         self._build_menu()
         self._build_ui()
+        self._build_tray_icon()
         self._bind_shortcuts()
         self._bind_autosave_events()
+        self.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
         self.autosave_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_autosave_timer, self.autosave_timer)
         self.device_timer = wx.Timer(self)
@@ -339,6 +345,12 @@ class ASIOAFrame(wx.Frame):
         wx.CallAfter(self.start_plugin_scan)
         self.play_sound("ready")
         self.Bind(wx.EVT_CLOSE, self.on_close)
+
+    def _build_tray_icon(self) -> None:
+        try:
+            self.tray_icon = ASIOATrayIcon(self)
+        except Exception:
+            self.tray_icon = None
 
     def _build_menu(self) -> None:
         menu_bar = wx.MenuBar()
@@ -359,7 +371,7 @@ class ASIOAFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _event: self.save_settings(), save_item)
         self.Bind(wx.EVT_MENU, lambda _event: self.open_command_palette(), command_item)
         self.Bind(wx.EVT_MENU, lambda _event: self.check_for_updates(), updates_item)
-        self.Bind(wx.EVT_MENU, lambda _event: self.Close(), exit_item)
+        self.Bind(wx.EVT_MENU, lambda _event: self.exit_application(), exit_item)
         self.Bind(wx.EVT_MENU, lambda _event: self.select_tab("Diagnostics"), diagnostics_item)
         self.Bind(wx.EVT_MENU, lambda _event: self.open_help(), help_item)
 
@@ -414,8 +426,8 @@ class ASIOAFrame(wx.Frame):
         self._add_diagnostics_tab()
 
         button_row = wx.BoxSizer(wx.HORIZONTAL)
-        close = wx.Button(panel, label="Close")
-        close.Bind(wx.EVT_BUTTON, lambda _event: self.Close())
+        close = wx.Button(panel, label="Minimize to tray")
+        close.Bind(wx.EVT_BUTTON, lambda _event: self.minimize_to_tray("ASIOA minimized to the system tray."))
         button_row.Add(close, 0, wx.RIGHT, 8)
         root.Add(button_row, 0, wx.ALL, 8)
 
@@ -452,6 +464,7 @@ class ASIOAFrame(wx.Frame):
         ]:
             button = wx.Button(panel, label=label)
             button.Bind(wx.EVT_BUTTON, handler)
+            button.Bind(wx.EVT_SET_FOCUS, lambda event, list_control=self.route_list: self.on_action_button_focus(event, list_control))
             self.route_action_buttons[key] = button
             buttons.Add(button, 0, wx.RIGHT, 6)
         sizer.Add(buttons, 0, wx.ALL, 6)
@@ -723,6 +736,7 @@ class ASIOAFrame(wx.Frame):
         for key, label, handler in actions:
             button = wx.Button(panel, label=label)
             button.Bind(wx.EVT_BUTTON, handler)
+            button.Bind(wx.EVT_SET_FOCUS, lambda event, list_control=target: self.on_action_button_focus(event, list_control))
             buttons[key] = button
             row.Add(button, 0, wx.RIGHT, 6)
         self.endpoint_action_buttons[id(target)] = buttons
@@ -738,6 +752,14 @@ class ASIOAFrame(wx.Frame):
 
     def on_list_focus(self, event: wx.FocusEvent, control: wx.ListCtrl) -> None:
         self.ensure_list_selection(control)
+        event.Skip()
+
+    def on_action_button_focus(self, event: wx.FocusEvent, control: wx.ListCtrl) -> None:
+        self.ensure_list_selection(control)
+        if control is getattr(self, "route_list", None):
+            self.update_route_action_labels()
+        else:
+            self.update_endpoint_action_labels(control)
         event.Skip()
 
     def on_route_list_selection(self, event: wx.ListEvent) -> None:
@@ -1169,9 +1191,50 @@ class ASIOAFrame(wx.Frame):
     def on_autosave_timer(self, _event: wx.TimerEvent) -> None:
         self.autosave_and_hot_apply()
 
+    def on_char_hook(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() != wx.WXK_ESCAPE:
+            self._last_escape_at = None
+            event.Skip()
+            return
+        now = datetime.now()
+        if self._last_escape_at and (now - self._last_escape_at).total_seconds() <= 1.4:
+            self._last_escape_at = None
+            self.minimize_to_tray("ASIOA minimized to the system tray after double Escape.")
+            return
+        self._last_escape_at = now
+        event.Skip()
+
+    def minimize_to_tray(self, message: str) -> None:
+        self.autosave_and_hot_apply()
+        self.Iconize(True)
+        self.Hide()
+        self.SetStatus(message)
+        self.play_sound("notification")
+
+    def restore_from_tray(self) -> None:
+        self.Show(True)
+        self.Iconize(False)
+        self.Raise()
+        self.SetFocus()
+        self.SetStatus("ASIOA restored from the system tray.")
+
+    def exit_application(self) -> None:
+        self._force_exit = True
+        self.autosave_and_hot_apply()
+        if self.tray_icon is not None:
+            self.tray_icon.RemoveIcon()
+            self.tray_icon.Destroy()
+            self.tray_icon = None
+        self.Destroy()
+
     def on_close(self, event: wx.CloseEvent) -> None:
         self.autosave_and_hot_apply()
-        event.Skip()
+        if self._force_exit or not self.settings.keep_engine_active:
+            event.Skip()
+            return
+        if event.CanVeto():
+            event.Veto()
+        self.minimize_to_tray("ASIOA is still running in the system tray so audio routes stay active.")
 
     def refresh_devices(self) -> None:
         self.update_overview()
@@ -1493,6 +1556,23 @@ class ASIOAFrame(wx.Frame):
             self.status_history.append(entry)
             self.status_history = self.status_history[-40:]
             self.update_overview()
+
+
+class ASIOATrayIcon(wx.adv.TaskBarIcon):
+    def __init__(self, frame: ASIOAFrame) -> None:
+        super().__init__()
+        self.frame = frame
+        icon = wx.ArtProvider.GetIcon(wx.ART_INFORMATION, wx.ART_FRAME_ICON, (16, 16))
+        self.SetIcon(icon, APP_NAME)
+        self.Bind(wx.adv.EVT_TASKBAR_LEFT_DCLICK, lambda _event: self.frame.restore_from_tray())
+
+    def CreatePopupMenu(self) -> wx.Menu:
+        menu = wx.Menu()
+        restore = menu.Append(wx.ID_ANY, "Restore ASIOA Audio Router")
+        exit_item = menu.Append(wx.ID_EXIT, "Exit ASIOA Audio Router")
+        self.Bind(wx.EVT_MENU, lambda _event: self.frame.restore_from_tray(), restore)
+        self.Bind(wx.EVT_MENU, lambda _event: self.frame.exit_application(), exit_item)
+        return menu
 
 
 class ScreenReaderNotifier:
