@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover - non-Windows dev/test environments.
 
 
 APP_NAME = "ASIOA Audio Router"
-APP_VERSION = "0.2.8"
+APP_VERSION = "0.2.9"
 CHANNEL_COUNT = 68
 CHANNEL_PAIRS = [f"{left}-{left + 1}" for left in range(1, CHANNEL_COUNT, 2)]
 UPDATE_MANIFEST_URLS = [
@@ -48,6 +48,8 @@ SETTINGS_PATH = app_data_dir() / "settings.json"
 INSTALLER_DRIVER_CHOICE_PATH = app_data_dir() / "installer-driver-choice.json"
 DIAGNOSTICS_INBOX = app_data_dir() / ".diagnostics-inbox"
 SETTINGS_BACKUP_DIR = app_data_dir() / "settings-backups"
+LOG_DIR = app_data_dir() / "logs"
+LOG_PATH = LOG_DIR / "asioa-control-panel.log"
 
 
 def resource_path(*parts: str) -> Path:
@@ -62,6 +64,16 @@ def resource_path(*parts: str) -> Path:
         if path.exists():
             return path
     return candidates[0].joinpath(*parts)
+
+
+def write_log(message: str) -> None:
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().isoformat(timespec="seconds")
+        with LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(f"{stamp} {message}\n")
+    except Exception:
+        pass
 
 
 DRIVER_MODES = [
@@ -98,6 +110,49 @@ AUTOSAVE_DELAY_MS = 500
 ASIOA_DRIVER_REGISTRY_PATH = r"SOFTWARE\ASIO\ASIOA Audio Router"
 COMMUNICATION_BRIDGE_INPUT = "ASIOA Communication input 1/2"
 COMMUNICATION_BRIDGE_OUTPUT = "ASIOA Communication output 1/2"
+_ASIOA_WINDOWS_ENDPOINT_CACHE: list[str] = []
+
+
+def hidden_startupinfo() -> subprocess.STARTUPINFO | None:
+    if os.name != "nt":
+        return None
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return startupinfo
+
+
+def hidden_creationflags() -> int:
+    if os.name != "nt":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def run_hidden(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        command,
+        startupinfo=hidden_startupinfo(),
+        creationflags=hidden_creationflags(),
+        **kwargs,
+    )
+
+
+def popen_hidden(command: list[str], **kwargs: Any) -> subprocess.Popen:
+    return subprocess.Popen(
+        command,
+        startupinfo=hidden_startupinfo(),
+        creationflags=hidden_creationflags(),
+        **kwargs,
+    )
+
+
+def shell_execute_elevated_hidden(executable: str, parameters: str) -> int:
+    if os.name != "nt":
+        raise OSError("Elevated driver installation is only available on Windows.")
+    result = ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, parameters, None, 0)
+    if result <= 32:
+        raise OSError(f"Windows could not start the elevated process. ShellExecute returned {result}.")
+    return int(result)
 
 
 def discover_windows_audio_devices() -> list[str]:
@@ -112,7 +167,7 @@ def discover_windows_audio_devices() -> list[str]:
             "-Command",
             "Get-CimInstance Win32_SoundDevice | Where-Object { $_.Name } | Select-Object -ExpandProperty Name",
         ]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=8, check=False)
+        result = run_hidden(command, capture_output=True, text=True, timeout=8, check=False)
     except Exception:
         return []
     names: list[str] = []
@@ -127,6 +182,10 @@ def discover_windows_audio_devices() -> list[str]:
 
 
 def discover_asioa_windows_endpoints() -> list[str]:
+    return list(_ASIOA_WINDOWS_ENDPOINT_CACHE)
+
+
+def probe_asioa_windows_endpoints() -> list[str]:
     if os.name != "nt":
         return []
     try:
@@ -141,7 +200,7 @@ def discover_asioa_windows_endpoints() -> list[str]:
             "$items += Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'ASIOA' -or $_.Name -match 'ASIOA' } | ForEach-Object { if ($_.FriendlyName) { $_.FriendlyName } else { $_.Name } }; "
             "$items | Where-Object { $_ } | Sort-Object -Unique",
         ]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=8, check=False)
+        result = run_hidden(command, capture_output=True, text=True, timeout=8, check=False)
     except Exception:
         return []
     names: list[str] = []
@@ -153,6 +212,67 @@ def discover_asioa_windows_endpoints() -> list[str]:
         seen.add(name.lower())
         names.append(name)
     return names
+
+
+@dataclass(slots=True)
+class AsioDriverInfo:
+    name: str
+    clsid: str = ""
+    dll_path: str = ""
+    source: str = "Windows ASIO registry"
+
+
+def discover_asio_drivers() -> list[AsioDriverInfo]:
+    if winreg is None:
+        return []
+    roots = [
+        (winreg.HKEY_LOCAL_MACHINE, "HKLM"),
+        (winreg.HKEY_CURRENT_USER, "HKCU"),
+    ]
+    views = [0]
+    for view_name in ("KEY_WOW64_64KEY", "KEY_WOW64_32KEY"):
+        view = getattr(winreg, view_name, 0)
+        if view and view not in views:
+            views.append(view)
+    drivers: list[AsioDriverInfo] = []
+    seen: set[str] = set()
+    for root, root_name in roots:
+        for view in views:
+            try:
+                with winreg.OpenKey(root, r"SOFTWARE\ASIO", 0, winreg.KEY_READ | view) as asio_root:
+                    index = 0
+                    while True:
+                        try:
+                            name = winreg.EnumKey(asio_root, index)
+                        except OSError:
+                            break
+                        index += 1
+                        key_id = name.lower()
+                        if key_id in seen:
+                            continue
+                        seen.add(key_id)
+                        clsid = ""
+                        dll_path = ""
+                        try:
+                            with winreg.OpenKey(asio_root, name, 0, winreg.KEY_READ | view) as driver_key:
+                                try:
+                                    clsid = str(winreg.QueryValueEx(driver_key, "CLSID")[0])
+                                except OSError:
+                                    clsid = ""
+                        except OSError:
+                            pass
+                        if clsid:
+                            try:
+                                clsid_key_path = rf"SOFTWARE\Classes\CLSID\{clsid}\InprocServer32"
+                                with winreg.OpenKey(root, clsid_key_path, 0, winreg.KEY_READ | view) as clsid_key:
+                                    dll_path = str(winreg.QueryValueEx(clsid_key, None)[0])
+                            except OSError:
+                                pass
+                        drivers.append(AsioDriverInfo(name=name, clsid=clsid, dll_path=dll_path, source=f"{root_name} ASIO registry"))
+            except OSError:
+                continue
+    drivers.sort(key=lambda item: item.name.lower())
+    return drivers
 
 
 def compare_versions(left: str, right: str) -> int:
@@ -407,7 +527,6 @@ class Settings:
                 self.endpoints.append(endpoint)
                 existing.add(name)
         self.ensure_windows_bridge_pairs(existing)
-        self.ensure_windows_audio_devices()
         for endpoint in self.endpoints:
             if "sessionwire" in endpoint.name.lower() and self.sessionwire_white_noise_guard:
                 endpoint.white_noise_guard = True
@@ -426,9 +545,25 @@ class Settings:
                     route.muted = True
                     route.monitor = False
 
-    def ensure_windows_audio_devices(self) -> None:
+    def ensure_discovered_audio_devices(self, windows_devices: list[str], asio_drivers: list[AsioDriverInfo]) -> int:
         existing = {endpoint.name for endpoint in self.endpoints}
-        for device_name in discover_windows_audio_devices():
+        added = 0
+        for driver in asio_drivers:
+            input_name = f"ASIO driver input: {driver.name}"
+            output_name = f"ASIO driver output: {driver.name}"
+            if input_name not in existing:
+                self.endpoints.append(
+                    Endpoint(input_name, "ASIO driver input", "1-2", monitor=False, muted=True, volume=0, role=driver.source)
+                )
+                existing.add(input_name)
+                added += 1
+            if output_name not in existing:
+                self.endpoints.append(
+                    Endpoint(output_name, "ASIO driver output", "1-2", monitor=True, role=driver.source)
+                )
+                existing.add(output_name)
+                added += 1
+        for device_name in windows_devices:
             output_name = f"Windows output: {device_name}"
             input_name = f"Windows input: {device_name}"
             if output_name not in existing:
@@ -436,11 +571,14 @@ class Settings:
                     Endpoint(output_name, "System playback device", "1-2", monitor=True, role="Windows audio device")
                 )
                 existing.add(output_name)
+                added += 1
             if input_name not in existing:
                 self.endpoints.append(
                     Endpoint(input_name, "System recording device", "1-2", monitor=False, muted=True, volume=0, role="Windows audio device input")
                 )
                 existing.add(input_name)
+                added += 1
+        return added
 
     def ensure_windows_bridge_pairs(self, existing: set[str]) -> None:
         for pair in CHANNEL_PAIRS:
@@ -590,6 +728,8 @@ class ASIOAFrame(wx.Frame):
         self._settings_dirty = False
         self._last_saved_payload = ""
         self._last_announced_status = ""
+        self._device_refresh_running = False
+        self._last_device_refresh_summary = "Device discovery will run quietly in the background."
         self.status_history: list[str] = []
         self.tray_icon: ASIOATrayIcon | None = None
         self._build_menu()
@@ -612,6 +752,7 @@ class ASIOAFrame(wx.Frame):
         self.update_driver_action_visibility()
         self.update_overview()
         self.announce_startup_status()
+        wx.CallAfter(self.refresh_devices)
         wx.CallAfter(self.start_plugin_scan)
         if self.settings.auto_check_updates:
             wx.CallLater(4500, lambda: self.check_for_updates(auto=True))
@@ -1088,7 +1229,7 @@ class ASIOAFrame(wx.Frame):
         choices = [
             endpoint.name
             for endpoint in self.settings.endpoints
-            if endpoint.kind in {"Default monitoring output", "DAW return", "Virtual bus", "System playback device", "Windows communication bridge output", "Windows bridge output pair"} or endpoint.monitor
+            if endpoint.kind in {"Default monitoring output", "DAW return", "Virtual bus", "System playback device", "Windows communication bridge output", "Windows bridge output pair", "ASIO driver output"} or endpoint.monitor
         ]
         return choices or ["Main output 1/2"]
 
@@ -1194,8 +1335,8 @@ class ASIOAFrame(wx.Frame):
     def populate_endpoints(self) -> None:
         self._populating_lists = True
         for control, predicate in [
-            (getattr(self, "input_list", None), lambda item: item.kind in {"Application or physical input", "Application", "Physical input", "System recording device", "Windows communication bridge input", "Windows bridge input pair"}),
-            (getattr(self, "output_list", None), lambda item: item.kind in {"Default monitoring output", "DAW return", "Virtual bus", "System playback device", "Windows communication bridge output", "Windows bridge output pair"}),
+            (getattr(self, "input_list", None), lambda item: item.kind in {"Application or physical input", "Application", "Physical input", "System recording device", "Windows communication bridge input", "Windows bridge input pair", "ASIO driver input"}),
+            (getattr(self, "output_list", None), lambda item: item.kind in {"Default monitoring output", "DAW return", "Virtual bus", "System playback device", "Windows communication bridge output", "Windows bridge output pair", "ASIO driver output"}),
         ]:
             if control is None:
                 continue
@@ -1799,19 +1940,41 @@ class ASIOAFrame(wx.Frame):
             return
         command = [
             "powershell.exe",
+            "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
+            "-WindowStyle",
+            "Hidden",
             "-File",
             str(package),
         ]
         try:
-            subprocess.Popen(command, shell=False)
-            self.SetStatus("ASIOA driver installer launched. Follow the installer prompts and restart audio applications after it finishes.")
+            if self.is_running_as_admin():
+                popen_hidden(command, shell=False)
+            else:
+                parameters = " ".join(
+                    [
+                        "-NoProfile",
+                        "-ExecutionPolicy Bypass",
+                        "-WindowStyle Hidden",
+                        f'-File "{package}"',
+                    ]
+                )
+                shell_execute_elevated_hidden("powershell.exe", parameters)
+            self.SetStatus("ASIOA driver registration launched. Approve the Windows prompt if it appears, then restart audio applications after it finishes.")
             wx.CallLater(3000, self.update_driver_action_visibility)
             self.play_sound("notification")
         except OSError as exc:
             self.SetStatus(f"Could not launch ASIOA driver installer: {exc}.")
             self.play_sound("error")
+
+    def is_running_as_admin(self) -> bool:
+        if os.name != "nt":
+            return False
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
 
     def engine_restart_required(self) -> bool:
         restart_keys = {
@@ -1863,7 +2026,7 @@ class ASIOAFrame(wx.Frame):
             return
         restart_script = resource_path("engine", "restart-asioa-engine.ps1")
         if restart_script.exists():
-            subprocess.Popen(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", str(restart_script)], shell=False)
+            popen_hidden(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", str(restart_script)], shell=False)
             self.SetStatus("Settings were sent to the ASIOA engine. The audio engine restart was launched because driver or buffer settings changed.")
             return
         self.SetStatus("Settings were sent to the ASIOA engine. A restart is required when the native engine is running, but the restart helper is not bundled yet.")
@@ -1949,18 +2112,52 @@ class ASIOAFrame(wx.Frame):
         self.minimize_to_tray("ASIOA is still running in the system tray so audio routes stay active.")
 
     def refresh_devices(self) -> None:
-        previous_count = len(self.settings.endpoints)
-        self.settings.ensure_windows_audio_devices()
+        if self._device_refresh_running:
+            return
+        self._device_refresh_running = True
+        threading.Thread(target=self.device_refresh_worker, name="ASIOADeviceRefresh", daemon=True).start()
+
+    def device_refresh_worker(self) -> None:
+        try:
+            windows_devices = discover_windows_audio_devices()
+            asio_drivers = discover_asio_drivers()
+            windows_endpoints = probe_asioa_windows_endpoints()
+            wx.CallAfter(self.finish_device_refresh, windows_devices, asio_drivers, windows_endpoints, "")
+        except Exception as exc:
+            write_log(f"Device discovery failed: {exc}")
+            wx.CallAfter(self.finish_device_refresh, [], [], [], str(exc))
+
+    def finish_device_refresh(
+        self,
+        windows_devices: list[str],
+        asio_drivers: list[AsioDriverInfo],
+        windows_endpoints: list[str],
+        error: str,
+    ) -> None:
+        global _ASIOA_WINDOWS_ENDPOINT_CACHE
+        self._device_refresh_running = False
+        if error:
+            self._last_device_refresh_summary = f"Device discovery was delayed: {error}"
+            write_log(self._last_device_refresh_summary)
+            self.update_overview()
+            return
+        _ASIOA_WINDOWS_ENDPOINT_CACHE = windows_endpoints
+        added = self.settings.ensure_discovered_audio_devices(windows_devices, asio_drivers)
         choices = self.route_endpoint_choices()
         self.set_choice_items(self.route_source_choice, choices)
         self.set_choice_items(self.route_destination_choice, choices)
         monitor_control = self.controls.get("default_monitor_device")
         if isinstance(monitor_control, wx.Choice):
             self.set_choice_items(monitor_control, self.monitor_device_choices(), self.settings.default_monitor_device)
-        if len(self.settings.endpoints) != previous_count:
+        self._last_device_refresh_summary = (
+            f"Device discovery found {len(windows_devices)} Windows sound devices, "
+            f"{len(asio_drivers)} ASIO drivers, and {len(windows_endpoints)} ASIOA Windows endpoints."
+        )
+        write_log(self._last_device_refresh_summary)
+        if added:
             self.populate_endpoints()
             self.mark_settings_dirty()
-            self.SetStatus(f"Audio device list updated. {len(self.settings.endpoints) - previous_count} new routable endpoint entries added.")
+            self.SetStatus(f"Audio device list updated. {added} new routable endpoint entries added.")
         self.update_overview()
 
     def on_device_timer(self, _event: wx.TimerEvent) -> None:
@@ -2196,7 +2393,7 @@ class ASIOAFrame(wx.Frame):
             answer = wx.MessageBox(message, "ASIOA update ready", wx.YES_NO | wx.ICON_INFORMATION, self)
             if answer == wx.YES:
                 try:
-                    subprocess.Popen([str(target)], shell=False)
+                    popen_hidden([str(target)], shell=False)
                     self.SetStatus(f"Started ASIOA {update.version} installer.")
                 except Exception as exc:
                     self.SetStatus(f"Downloaded update, but could not start installer. {exc}")
@@ -2207,7 +2404,7 @@ class ASIOAFrame(wx.Frame):
             return
         DIAGNOSTICS_INBOX.mkdir(parents=True, exist_ok=True)
         try:
-            subprocess.run(["attrib", "+h", str(DIAGNOSTICS_INBOX)], check=False, capture_output=True)
+            run_hidden(["attrib", "+h", str(DIAGNOSTICS_INBOX)], check=False, capture_output=True)
         except Exception:
             pass
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -2243,6 +2440,8 @@ class ASIOAFrame(wx.Frame):
                 f"Sessionwire white-noise guard: {self.settings.sessionwire_white_noise_guard}",
                 f"Sessionwire white-noise threshold: {self.settings.sessionwire_noise_floor_db} dB",
                 f"Diagnostics inbox: {DIAGNOSTICS_INBOX}",
+                f"Log file: {LOG_PATH}",
+                f"Last device discovery: {self._last_device_refresh_summary}",
             ]
         )
 
@@ -2294,6 +2493,11 @@ class ASIOAFrame(wx.Frame):
   <ul>{driver_status}</ul>
   <h2>Driver capability map</h2>
   <ul>{capability_status}</ul>
+  <h2>Device discovery</h2>
+  <ul>
+    <li>{self._last_device_refresh_summary}</li>
+    <li>Control panel log: {LOG_PATH}</li>
+  </ul>
   <h2>Recent status</h2>
   <ul>{status_items or '<li>No status messages yet.</li>'}</ul>
   <h2>Protected buses</h2>
@@ -2379,6 +2583,7 @@ class ASIOAFrame(wx.Frame):
             return
 
     def SetStatus(self, message: str) -> None:  # noqa: N802 - wx-style name.
+        write_log(f"Status: {message}")
         self.status_text.SetLabel(f"Status: {message}")
         self.status_text.SetName(f"Status: {message}")
         self.append_status_history(message)

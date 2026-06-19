@@ -1,5 +1,5 @@
 #define MyAppName "ASIOA Audio Router"
-#define MyAppVersion "0.2.8"
+#define MyAppVersion "0.2.9"
 #define MyAppPublisher "Raywonder"
 #define MyAppExeName "ASIOA Audio Router.exe"
 #define SourceRoot "E:\Builds\asioa-audio-router\publish"
@@ -14,7 +14,7 @@ DefaultGroupName=ASIOA Audio Router
 DisableProgramGroupPage=yes
 LicenseFile=..\EULA.txt
 OutputDir=E:\Downloads\asioa-audio-router
-OutputBaseFilename=ASIOA-Audio-Router-Setup-0.2.8
+OutputBaseFilename=ASIOA-Audio-Router-Setup-0.2.9
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -39,11 +39,11 @@ Name: "{group}\Uninstall ASIOA Audio Router"; Filename: "{uninstallexe}"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\driver\install-asioa-driver.ps1"""; Description: "Register packaged ASIOA native ASIO driver"; Flags: skipifdoesntexist; Check: ShouldInstallDriverNow
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\driver\install-asioa-driver.ps1"""; Description: "Register packaged ASIOA native ASIO driver"; Flags: runhidden skipifdoesntexist; Check: ShouldInstallDriverNow
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch ASIOA Audio Router"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\driver\uninstall-asioa-driver.ps1"""; Flags: runhidden skipifdoesntexist; Check: ShouldRunDriverUninstall; RunOnceId: "UnregisterASIOADriver"
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\driver\uninstall-asioa-driver.ps1"""; Flags: runhidden skipifdoesntexist; Check: ShouldRunDriverUninstall; RunOnceId: "UnregisterASIOADriver"
 
 [Code]
 var

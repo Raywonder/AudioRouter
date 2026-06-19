@@ -1,9 +1,9 @@
 {
   "app": "ASIOA Audio Router",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "channel": "Stable",
-  "notes": "ASIOA 0.2.8 adds a driver capability map and live Windows endpoint detection so the app clearly separates the installed ASIO driver, modeled communication bridge, and future WDM/WASAPI endpoint layer.",
-  "installerUrl": "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-Setup-0.2.8.exe",
-  "portableUrl": "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-win-x64-portable-0.2.8.zip",
+  "notes": "ASIOA 0.2.9 keeps PowerShell and helper commands hidden, moves device discovery to a background worker so the control panel opens faster, adds ASIO registry discovery for ASIO4ALL, ReaRoute, and other installed ASIO drivers, and writes a readable control-panel log under AppData. The packaged ASIO driver still registers for ASIO-capable hosts; Windows-visible speaker and microphone endpoints remain the next native endpoint-driver milestone.",
+  "installerUrl": "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-Setup-0.2.9.exe",
+  "portableUrl": "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-win-x64-portable-0.2.9.zip",
   "pageUrl": "https://github.com/Raywonder/AudioRouter"
 }

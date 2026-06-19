@@ -1,3 +1,22 @@
+# ASIOA Audio Router 0.2.9
+
+This hotfix keeps ASIOA from opening command or PowerShell windows in front of the control panel while it checks devices, runs helper scripts, registers the ASIO driver, restarts the future engine helper, saves diagnostics, or starts an update installer. It also moves slow device discovery out of the startup path so the control panel can open first and update itself quietly.
+
+## Changed
+
+- Runs background PowerShell and command helpers with hidden Windows startup flags so device discovery and driver checks stay quiet.
+- Runs installer-driven ASIO driver registration hidden during setup, while still allowing the normal Windows elevation prompt when admin approval is required.
+- Launches the control-panel driver repair path through a hidden elevated PowerShell process instead of a foreground console.
+- Discovers Windows sound devices, ASIOA Windows endpoint status, and installed ASIO registry drivers from a background worker instead of blocking the UI thread.
+- Adds ASIO registry discovery for ASIO4ALL, ReaRoute, and other installed ASIO drivers, then exposes them as routable ASIO driver input and output rows in the control panel.
+- Adds a readable control-panel log at `%APPDATA%\ASIOA Audio Router\logs\asioa-control-panel.log` and shows the latest device-discovery result in the Overview tab and diagnostics.
+- Bumps the app and update manifest to 0.2.9 so installed 0.2.8 builds can detect this hotfix.
+
+## Driver status
+
+- The packaged native ASIOA driver still registers as an ASIO driver for ASIO-capable hosts.
+- ASIOA still does not expose a normal Windows speaker or microphone device yet. That WDM, WASAPI, and DirectSound endpoint driver remains the next native-driver milestone.
+
 # ASIOA Audio Router 0.2.8
 
 This hotfix makes driver capability reporting more honest and useful while ASIOA moves toward its first real Windows-visible communication endpoint.
