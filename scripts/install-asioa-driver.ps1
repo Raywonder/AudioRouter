@@ -8,7 +8,7 @@ if (-not (Test-Path $driverDll)) {
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    throw "Administrator permission is required to install the ASIOA system audio driver."
+    throw "Administrator permission is required to install the ASIOA native ASIO driver."
 }
 
 $signature = Get-AuthenticodeSignature -LiteralPath $driverDll
@@ -34,4 +34,4 @@ $marker = Join-Path $settingsDir "driver-installed.json"
     signedForPublicDistribution = ($signature.Status -eq "Valid")
 } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8
 
-Write-Host "ASIOA system audio driver registered."
+Write-Host "ASIOA native ASIO driver registered."

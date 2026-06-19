@@ -4,7 +4,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $driverDll = Join-Path $scriptDir "ASIOA.Driver.dll"
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    throw "Administrator permission is required to uninstall the ASIOA system audio driver."
+    throw "Administrator permission is required to uninstall the ASIOA native ASIO driver."
 }
 
 if (Test-Path $driverDll) {
@@ -19,4 +19,4 @@ $settingsDir = Join-Path $env:APPDATA "ASIOA Audio Router"
 $marker = Join-Path $settingsDir "driver-installed.json"
 Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
 
-Write-Host "ASIOA system audio driver registration removed."
+Write-Host "ASIOA native ASIO driver registration removed."

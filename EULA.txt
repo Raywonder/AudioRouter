@@ -1,34 +1,38 @@
 ASIOA Audio Router Release Agreement
 
-This installer contains the ASIOA Windows control app, native ASIOA driver
+This installer contains the ASIOA Windows control app, native ASIOA ASIO driver
 package, route model, feedback-guard verification tool, accessibility support
 files, release notes, and documentation.
 
 Driver installation:
-The setup wizard can register the packaged ASIOA virtual ASIO driver for local
-testing when ASIOA.Driver.dll and the driver install script are included in the
-installer. You may install the driver now, be reminded later, or install only
-the control panel. Driver registration requires administrator permission.
+The setup wizard can register the packaged ASIOA native ASIO driver for local
+testing with ASIO-capable hosts when ASIOA.Driver.dll and the driver install
+script are included in the installer. You may install the ASIO driver now, be
+reminded later, or install only the control panel. Driver registration requires
+administrator permission.
 
 Important current limitations:
 This package is intended for release evaluation, development, and hands-on local
-driver testing. The packaged native driver is not yet a publicly signed
-production driver. Kernel-level audio capture, per-application system audio
-capture, and VST3 or CLAP bridge plug-ins are not complete production features
-in this build. Those components require additional implementation, licensing
-review where applicable, compatibility testing, and driver or code signing
-before broad public distribution.
+driver testing. The packaged native ASIO driver is not yet a publicly signed
+production driver, and it does not create a Windows speaker, microphone,
+WDM/WASAPI, or DirectSound endpoint in this build. Kernel-level audio capture,
+per-application system audio capture, Windows-visible endpoint exposure, and
+VST3 or CLAP bridge plug-ins are not complete production features in this
+build. Those components require additional implementation, licensing review
+where applicable, compatibility testing, and driver or code signing before
+broad public distribution.
 
 By installing, you agree that:
 
 1. The software is provided as-is for release evaluation and development.
-2. The installer may register the packaged ASIOA virtual ASIO driver when you
+2. The installer may register the packaged ASIOA native ASIO driver when you
    choose the driver installation option and the driver files are present.
 3. The current app can test and display the route model, feedback guard, channel
    layout, buffering settings, startup settings, driver health, and accessibility
    surface.
-4. The current package is not yet a finished, publicly signed virtual ASIO audio
-   device release for production use.
+4. The current package is not yet a finished, publicly signed virtual audio
+   device release for production use, and regular Windows apps will not see a
+   new ASIOA speaker or microphone until the WDM/WASAPI endpoint layer is added.
 5. Any public ASIO driver distribution must follow either Steinberg's GPLv3 ASIO
    SDK path or a reviewed proprietary ASIO license path, plus the applicable
    Windows driver and code-signing requirements.

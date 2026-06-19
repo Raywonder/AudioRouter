@@ -1,5 +1,5 @@
 #define MyAppName "ASIOA Audio Router"
-#define MyAppVersion "0.2.7"
+#define MyAppVersion "0.2.8"
 #define MyAppPublisher "Raywonder"
 #define MyAppExeName "ASIOA Audio Router.exe"
 #define SourceRoot "E:\Builds\asioa-audio-router\publish"
@@ -14,7 +14,7 @@ DefaultGroupName=ASIOA Audio Router
 DisableProgramGroupPage=yes
 LicenseFile=..\EULA.txt
 OutputDir=E:\Downloads\asioa-audio-router
-OutputBaseFilename=ASIOA-Audio-Router-Setup-0.2.7
+OutputBaseFilename=ASIOA-Audio-Router-Setup-0.2.8
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -39,7 +39,7 @@ Name: "{group}\Uninstall ASIOA Audio Router"; Filename: "{uninstallexe}"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\driver\install-asioa-driver.ps1"""; Description: "Register packaged ASIOA virtual ASIO driver"; Flags: skipifdoesntexist; Check: ShouldInstallDriverNow
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\driver\install-asioa-driver.ps1"""; Description: "Register packaged ASIOA native ASIO driver"; Flags: skipifdoesntexist; Check: ShouldInstallDriverNow
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch ASIOA Audio Router"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -59,12 +59,12 @@ begin
   DriverPage := CreateInputOptionPage(
     wpSelectTasks,
     'ASIOA Audio Driver',
-    'Choose how ASIOA should handle the packaged virtual ASIO driver.',
-    'If this installer includes ASIOA.Driver.dll, it can register the packaged driver for local testing. Public distribution still requires a valid driver signing path. You can register it now, be reminded later, or install only the control panel.',
+    'Choose how ASIOA should handle the packaged native ASIO driver.',
+    'If this installer includes ASIOA.Driver.dll, it can register the packaged ASIO driver for local testing with ASIO-capable hosts. Windows speaker and microphone endpoint support is a separate native-driver milestone. You can register the ASIO driver now, be reminded later, or install only the control panel.',
     True,
     False
   );
-  DriverPage.Add('Install ASIOA driver now');
+  DriverPage.Add('Install ASIOA ASIO driver now');
   DriverPage.Add('Ask me later');
   DriverPage.Add('Control panel only');
   DriverPage.SelectedValueIndex := 0;
@@ -94,7 +94,7 @@ begin
     if Assigned(DriverPage) then
     begin
       if DriverPage.SelectedValueIndex = 0 then
-        Choice := 'Install ASIOA driver now'
+        Choice := 'Install ASIOA ASIO driver now'
       else if DriverPage.SelectedValueIndex = 1 then
         Choice := 'Ask me later'
       else

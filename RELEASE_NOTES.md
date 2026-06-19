@@ -1,3 +1,18 @@
+# ASIOA Audio Router 0.2.8
+
+This hotfix makes driver capability reporting more honest and useful while ASIOA moves toward its first real Windows-visible communication endpoint.
+
+## Added
+
+- Adds a driver capability map to the Overview and diagnostics output, covering ASIO host availability, the communication bridge model, Windows WDM/WASAPI/DirectSound endpoint exposure, per-application WASAPI capture, and system sound device routing.
+- Detects whether any ASIOA-named Windows audio endpoint is actually visible to Windows, instead of assuming modeled bridge entries are real speaker or microphone devices.
+
+## Changed
+
+- Updates driver health wording to clearly distinguish the native ASIO driver from the future Windows speaker/microphone endpoint layer.
+- Updates the installer agreement and wizard text so users know the current driver registers with ASIO-capable hosts, while normal Windows app endpoint support remains the next native-driver milestone.
+- Keeps the install or repair button hidden when the ASIO driver is already registered and healthy.
+
 # ASIOA Audio Router 0.2.7
 
 This hotfix makes the control panel react faster and models the Windows-facing audio bridge more clearly for apps that need normal system audio endpoints.

@@ -41,7 +41,7 @@ See [docs/dependencies.md](docs/dependencies.md) for local dependency paths.
 
 ## Current Build Status
 
-This build currently contains the route model, feedback-guard smoke test, and a wxPython control panel that opens reliably as the primary Windows UI. The wxPython UI includes a readable Overview web view, quiet background device refresh, screen-reader routing settings, startup update-check settings, and a local diagnostics inbox for agent-readable reports. The WPF control app is retained as a secondary reference app. Native audio capture, the ASIO driver, the real-time effects host, and the VST3/CLAP bridge require the native C++ toolchain and SDK path described in `docs/toolchain.md`.
+This build currently contains the route model, feedback-guard smoke test, wxPython control panel, native ASIO driver package, and updater path. The wxPython UI includes a readable Overview web view, quiet background device refresh, screen-reader routing settings, startup update-check settings, driver capability reporting, and a local diagnostics inbox for agent-readable reports. The WPF control app is retained as a secondary reference app. The native ASIO driver exposes the ASIOA 68-in and 68-out ASIO surface for ASIO-capable hosts when registered. A true Windows-visible speaker or microphone endpoint for WDM, WASAPI, DirectSound, and non-ASIO apps is the next native-driver milestone, along with production signing, per-application capture, the real-time effects host, and the VST3/CLAP bridge.
 
 User documentation:
 
