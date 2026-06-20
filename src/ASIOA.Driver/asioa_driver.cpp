@@ -74,7 +74,7 @@ void ASIOADriver::getDriverName(char* name) {
 }
 
 long ASIOADriver::getDriverVersion() {
-    return 203;
+    return 210;
 }
 
 void ASIOADriver::getErrorMessage(char* string) {

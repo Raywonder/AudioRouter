@@ -1,5 +1,5 @@
 #define MyAppName "ASIOA Audio Router"
-#define MyAppVersion "0.2.9"
+#define MyAppVersion "0.2.10"
 #define MyAppPublisher "Raywonder"
 #define MyAppExeName "ASIOA Audio Router.exe"
 #define SourceRoot "E:\Builds\asioa-audio-router\publish"
@@ -14,13 +14,16 @@ DefaultGroupName=ASIOA Audio Router
 DisableProgramGroupPage=yes
 LicenseFile=..\EULA.txt
 OutputDir=E:\Downloads\asioa-audio-router
-OutputBaseFilename=ASIOA-Audio-Router-Setup-0.2.9
+OutputBaseFilename=ASIOA-Audio-Router-Setup-0.2.10
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+CloseApplications=yes
+CloseApplicationsFilter=ASIOA Audio Router.exe
+RestartApplications=no
 
 [Files]
 Source: "{#SourceRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -60,7 +63,7 @@ begin
     wpSelectTasks,
     'ASIOA Audio Driver',
     'Choose how ASIOA should handle the packaged native ASIO driver.',
-    'If this installer includes ASIOA.Driver.dll, it can register the packaged ASIO driver for local testing with ASIO-capable hosts. Windows speaker and microphone endpoint support is a separate native-driver milestone. You can register the ASIO driver now, be reminded later, or install only the control panel.',
+    'If this installer includes ASIOA.Driver.dll, it can register the packaged ASIO driver for ASIO-capable hosts. Windows speaker and microphone endpoint support, the kind ordinary apps such as TeamTalk need, is a separate native-driver milestone. You can register the ASIO driver now, be reminded later, or install only the control panel.',
     True,
     False
   );

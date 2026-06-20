@@ -1,9 +1,9 @@
 {
-  "app": "ASIOA Audio Router",
-  "version": "0.2.9",
-  "channel": "Stable",
-  "notes": "ASIOA 0.2.9 keeps PowerShell and helper commands hidden, moves device discovery to a background worker so the control panel opens faster, adds ASIO registry discovery for ASIO4ALL, ReaRoute, and other installed ASIO drivers, and writes a readable control-panel log under AppData. The packaged ASIO driver still registers for ASIO-capable hosts; Windows-visible speaker and microphone endpoints remain the next native endpoint-driver milestone.",
-  "installerUrl": "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-Setup-0.2.9.exe",
-  "portableUrl": "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-win-x64-portable-0.2.9.zip",
-  "pageUrl": "https://github.com/Raywonder/AudioRouter"
+    "app":  "ASIOA Audio Router",
+    "version":  "0.2.10",
+    "channel":  "Stable",
+    "notes":  "ASIOA 0.2.10 adds real driver-health behavior to the Overview action button, allowing the packaged ASIO driver to be enabled, repaired, or disabled from the control panel. It also makes routing labels clearer for ASIO host pairs, physical Windows devices, and planned WDM/WASAPI bridge pairs; improves installer behavior when ASIOA is already running; and explicitly explains that TeamTalk-style Windows sound devices require the separate endpoint-driver milestone.",
+    "installerUrl":  "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-Setup-0.2.10.exe",
+    "portableUrl":  "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-win-x64-portable-0.2.10.zip",
+    "pageUrl":  "https://github.com/Raywonder/AudioRouter"
 }

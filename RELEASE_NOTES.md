@@ -1,3 +1,11 @@
+# ASIOA Audio Router 0.2.10
+
+- Overview driver action now changes based on real driver health: if the ASIO driver is registered and the DLL exists, the button becomes "Disable ASIOA ASIO driver"; otherwise it offers enable or repair.
+- Driver status now clearly separates the installed ASIO host driver from the future Windows WDM/WASAPI/DirectSound endpoint layer needed by ordinary apps such as TeamTalk.
+- Routing names now distinguish ASIO host pairs, physical Windows playback/recording devices, and planned Windows app bridge pairs so users can tell what is routable today and what needs the endpoint-driver milestone.
+- The Routing tab includes a plain-language guide explaining how to route a source to a destination and why planned bridge entries do not yet appear as Windows sound devices.
+- The installer now closes a running ASIOA control panel before updating, keeps installation in Program Files, and registers the packaged ASIO driver after unregistering the previous DLL.
+- Native ASIO driver version increased to 210 for ASIO-capable hosts that report driver versions.
 # ASIOA Audio Router 0.2.9
 
 This hotfix keeps ASIOA from opening command or PowerShell windows in front of the control panel while it checks devices, runs helper scripts, registers the ASIO driver, restarts the future engine helper, saves diagnostics, or starts an update installer. It also moves slow device discovery out of the startup path so the control panel can open first and update itself quietly.
@@ -198,4 +206,4 @@ This is the first installable Windows control-app release.
 
 ## Not Included Yet
 
-This release does not install a native virtual ASIO driver, kernel driver, per-application capture driver, or VST3 bridge. Those components still require native implementation, licensing review, and signing before distribution.
+This release does not install a Windows WDM/WASAPI/DirectSound speaker or microphone endpoint, kernel capture driver, per-application capture driver, or VST3 bridge. Those components still require native implementation, licensing review, and signing before distribution.

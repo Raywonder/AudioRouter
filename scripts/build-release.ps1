@@ -61,11 +61,22 @@ if (Test-Path $PublishDir) {
 Copy-Item -Path (Join-Path $wxAppDir "*") -Destination $PublishDir -Recurse -Force
 & $iscc $installerScript
 
-$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.9.zip"
+$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.10.zip"
 Compress-Archive -Path (Join-Path $PublishDir "*") -DestinationPath $portableZip -Force
 
 $checksumsPath = Join-Path $OutputDir "SHA256SUMS.txt"
-$artifacts = Get-ChildItem $OutputDir -File | Where-Object { $_.Name -ne "SHA256SUMS.txt" } | Sort-Object Name
+$installerArtifact = Join-Path $OutputDir "ASIOA-Audio-Router-Setup-0.2.10.exe"
+$releaseArtifactNames = @(
+    (Split-Path -Leaf $installerArtifact),
+    (Split-Path -Leaf $portableZip)
+)
+$artifacts = Get-ChildItem $OutputDir -File |
+    Where-Object { $_.Name -in $releaseArtifactNames } |
+    Sort-Object Name
+if ($artifacts.Count -ne $releaseArtifactNames.Count) {
+    $missing = $releaseArtifactNames | Where-Object { $_ -notin $artifacts.Name }
+    throw "Missing release artifact(s): $($missing -join ', ')"
+}
 $lines = foreach ($artifact in $artifacts) {
     $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $artifact.FullName
     "$($hash.Hash.ToLowerInvariant())  $($artifact.Name)"

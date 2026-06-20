@@ -17,6 +17,7 @@ if ($signature.Status -ne "Valid") {
 }
 
 $regsvr = Join-Path $env:WINDIR "System32\regsvr32.exe"
+& $regsvr /s /u $driverDll
 & $regsvr /s $driverDll
 if ($LASTEXITCODE -ne 0) {
     throw "regsvr32 failed while registering ASIOA.Driver.dll. Exit code: $LASTEXITCODE"
@@ -30,8 +31,10 @@ $marker = Join-Path $settingsDir "driver-installed.json"
     installedAt = (Get-Date).ToString("s")
     path = $driverDll
     registration = "HKLM Software\\ASIO\\ASIOA Audio Router"
+    windowsEndpointLayer = "not-installed"
+    notes = "This package enables the native ASIO driver. WDM/WASAPI/DirectSound speaker and microphone endpoints require the separate endpoint-driver milestone."
     authenticodeStatus = $signature.Status.ToString()
     signedForPublicDistribution = ($signature.Status -eq "Valid")
 } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8
 
-Write-Host "ASIOA native ASIO driver registered."
+Write-Host "ASIOA native ASIO driver registered. Restart ASIO-capable hosts to see the updated driver."

@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover - non-Windows dev/test environments.
 
 
 APP_NAME = "ASIOA Audio Router"
-APP_VERSION = "0.2.9"
+APP_VERSION = "0.2.10"
 CHANNEL_COUNT = 68
 CHANNEL_PAIRS = [f"{left}-{left + 1}" for left in range(1, CHANNEL_COUNT, 2)]
 UPDATE_MANIFEST_URLS = [
@@ -110,6 +110,11 @@ AUTOSAVE_DELAY_MS = 500
 ASIOA_DRIVER_REGISTRY_PATH = r"SOFTWARE\ASIO\ASIOA Audio Router"
 COMMUNICATION_BRIDGE_INPUT = "ASIOA Communication input 1/2"
 COMMUNICATION_BRIDGE_OUTPUT = "ASIOA Communication output 1/2"
+WDM_ENDPOINT_MILESTONE = (
+    "TeamTalk, browsers, and ordinary Windows apps need a Windows WDM, WASAPI, or DirectSound "
+    "speaker and microphone endpoint. The packaged ASIOA driver is an ASIO host driver only, "
+    "so it appears to ASIO-capable hosts, not normal Windows sound-device lists."
+)
 _ASIOA_WINDOWS_ENDPOINT_CACHE: list[str] = []
 
 
@@ -549,8 +554,8 @@ class Settings:
         existing = {endpoint.name for endpoint in self.endpoints}
         added = 0
         for driver in asio_drivers:
-            input_name = f"ASIO driver input: {driver.name}"
-            output_name = f"ASIO driver output: {driver.name}"
+            input_name = f"ASIO host input pair 1/2: {driver.name}"
+            output_name = f"ASIO host output pair 1/2: {driver.name}"
             if input_name not in existing:
                 self.endpoints.append(
                     Endpoint(input_name, "ASIO driver input", "1-2", monitor=False, muted=True, volume=0, role=driver.source)
@@ -564,8 +569,8 @@ class Settings:
                 existing.add(output_name)
                 added += 1
         for device_name in windows_devices:
-            output_name = f"Windows output: {device_name}"
-            input_name = f"Windows input: {device_name}"
+            output_name = f"Physical or Windows playback output 1/2: {device_name}"
+            input_name = f"Physical or Windows recording input 1/2: {device_name}"
             if output_name not in existing:
                 self.endpoints.append(
                     Endpoint(output_name, "System playback device", "1-2", monitor=True, role="Windows audio device")
@@ -582,8 +587,8 @@ class Settings:
 
     def ensure_windows_bridge_pairs(self, existing: set[str]) -> None:
         for pair in CHANNEL_PAIRS:
-            input_name = f"WDM/WASAPI bridge input {pair}"
-            output_name = f"WDM/WASAPI bridge output {pair}"
+            input_name = f"Planned Windows app input bridge {pair}"
+            output_name = f"Planned Windows app output bridge {pair}"
             if input_name not in existing:
                 self.endpoints.append(
                     Endpoint(input_name, "Windows bridge input pair", pair, monitor=False, muted=True, volume=0, role="Windows app input")
@@ -871,9 +876,9 @@ class ASIOAFrame(wx.Frame):
         self.overview_view = wx.html2.WebView.New(panel)
         self.overview_view.SetName("ASIOA overview")
         sizer.Add(self.overview_view, 1, wx.EXPAND | wx.ALL, 6)
-        driver_button = wx.Button(panel, label="Install or repair ASIOA audio driver")
-        driver_button.SetName("Install or repair ASIOA audio driver")
-        driver_button.Bind(wx.EVT_BUTTON, lambda _event: self.install_or_repair_driver())
+        driver_button = wx.Button(panel, label="Install or repair ASIOA ASIO driver")
+        driver_button.SetName("Install or repair ASIOA ASIO driver")
+        driver_button.Bind(wx.EVT_BUTTON, lambda _event: self.toggle_driver_registration())
         self.driver_action_button = driver_button
         sizer.Add(driver_button, 0, wx.ALL, 6)
 
@@ -901,6 +906,12 @@ class ASIOAFrame(wx.Frame):
             "Configured audio routes",
         )
         sizer.Add(self.route_list, 1, wx.EXPAND | wx.ALL, 6)
+        self._add_readonly_text(
+            panel,
+            sizer,
+            "Routing guide:",
+            "Choose a source, then choose where it should go. Sources can be physical inputs, Windows recording devices, ASIO host inputs, DAW returns, or protected virtual buses. Destinations can be physical playback outputs, ASIO host outputs, DAW inputs, or virtual buses. The planned Windows app bridge entries describe the future TeamTalk/VB-Cable-style WDM endpoint layer; they are not Windows sound devices until that native endpoint driver is installed.",
+        )
         self.route_list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda event: self.on_route_list_selection(event))
         self.route_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda _event: self.update_route_action_labels())
         buttons = wx.BoxSizer(wx.HORIZONTAL)
@@ -1823,7 +1834,7 @@ class ASIOAFrame(wx.Frame):
     def driver_status_lines(self) -> list[str]:
         health = self.installed_driver_health()
         if health.healthy:
-            install_state = "The ASIOA native ASIO driver is installed, registered with Windows ASIO, and the registered driver DLL is present."
+            install_state = "The ASIOA native ASIO driver is enabled, registered with Windows ASIO, and the registered driver DLL is present."
         elif health.registered and not health.dll_exists:
             install_state = "The ASIOA native ASIO driver registration exists, but the registered DLL is missing. Repair the ASIO driver before using it from ASIO hosts."
         elif health.package_available:
@@ -1838,6 +1849,7 @@ class ASIOAFrame(wx.Frame):
             install_state,
             endpoint_state,
             "The current packaged driver exposes the ASIOA 68-in and 68-out ASIO surface to ASIO-capable hosts. The Windows WDM, WASAPI, and DirectSound endpoint layer is the next native-driver milestone.",
+            WDM_ENDPOINT_MILESTONE,
             "miniaudio, WASAPI, PortAudio, JACK, and ASIO4ALL compatibility modes remain available for control-panel configuration, device discovery, and bridge planning.",
         ]
         if health.dll_path:
@@ -1864,7 +1876,7 @@ class ASIOAFrame(wx.Frame):
             DriverCapability(
                 "Windows WDM/WASAPI/DirectSound endpoint",
                 windows_status,
-                "This must appear as an actual Windows speaker or microphone device before apps like TeamTalk can pick ASIOA directly without an ASIO host.",
+                WDM_ENDPOINT_MILESTONE,
             ),
             DriverCapability(
                 "Per-application WASAPI capture",
@@ -1883,12 +1895,13 @@ class ASIOAFrame(wx.Frame):
             return
         health = self.installed_driver_health()
         if health.healthy:
-            self.driver_action_button.Hide()
-            self.driver_action_button.SetLabel("ASIOA audio driver installed and healthy")
-            self.driver_action_button.SetName("ASIOA audio driver installed and healthy")
+            self.driver_action_button.Show()
+            label = "Disable ASIOA ASIO driver"
+            self.driver_action_button.SetLabel(label)
+            self.driver_action_button.SetName(label)
         elif health.package_available:
             self.driver_action_button.Show()
-            label = "Install or repair ASIOA audio driver"
+            label = "Enable or repair ASIOA ASIO driver"
             self.driver_action_button.SetLabel(label)
             self.driver_action_button.SetName(label)
         else:
@@ -1896,6 +1909,12 @@ class ASIOAFrame(wx.Frame):
             self.driver_action_button.SetLabel("ASIOA audio driver package not bundled")
             self.driver_action_button.SetName("ASIOA audio driver package not bundled")
         self.driver_action_button.GetParent().Layout()
+
+    def toggle_driver_registration(self) -> None:
+        if self.installed_driver_health().healthy:
+            self.disable_driver()
+        else:
+            self.install_or_repair_driver()
 
     def show_driver_install_alert_if_needed(self) -> None:
         if self.installed_driver_health().healthy:
@@ -1922,7 +1941,7 @@ class ASIOAFrame(wx.Frame):
     def install_or_repair_driver(self) -> None:
         health = self.installed_driver_health()
         if health.healthy:
-            self.SetStatus("ASIOA native ASIO driver is already installed and healthy. No repair is needed.")
+            self.SetStatus("ASIOA native ASIO driver is enabled. Use the Overview button to disable it if needed.")
             self.update_driver_action_visibility()
             return
         package = self.driver_package_path()
@@ -1961,11 +1980,47 @@ class ASIOAFrame(wx.Frame):
                     ]
                 )
                 shell_execute_elevated_hidden("powershell.exe", parameters)
-            self.SetStatus("ASIOA driver registration launched. Approve the Windows prompt if it appears, then restart audio applications after it finishes.")
+            self.SetStatus("ASIOA ASIO driver enable or repair launched. Approve the Windows prompt if it appears, then restart ASIO-capable audio applications after it finishes.")
             wx.CallLater(3000, self.update_driver_action_visibility)
             self.play_sound("notification")
         except OSError as exc:
             self.SetStatus(f"Could not launch ASIOA driver installer: {exc}.")
+            self.play_sound("error")
+
+    def disable_driver(self) -> None:
+        package = resource_path("driver", "uninstall-asioa-driver.ps1")
+        if not package.exists():
+            self.SetStatus("ASIOA ASIO driver uninstall script is not bundled with this build.")
+            self.play_sound("error")
+            return
+        command = [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            str(package),
+        ]
+        try:
+            if self.is_running_as_admin():
+                popen_hidden(command, shell=False)
+            else:
+                parameters = " ".join(
+                    [
+                        "-NoProfile",
+                        "-ExecutionPolicy Bypass",
+                        "-WindowStyle Hidden",
+                        f'-File "{package}"',
+                    ]
+                )
+                shell_execute_elevated_hidden("powershell.exe", parameters)
+            self.SetStatus("ASIOA ASIO driver disable launched. Restart ASIO-capable audio applications after it finishes.")
+            wx.CallLater(3000, self.update_driver_action_visibility)
+            self.play_sound("notification")
+        except OSError as exc:
+            self.SetStatus(f"Could not launch ASIOA driver disable action: {exc}.")
             self.play_sound("error")
 
     def is_running_as_admin(self) -> bool:
