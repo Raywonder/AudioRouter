@@ -83,6 +83,13 @@ Current endpoint goals:
 
 Secure Boot systems require Microsoft-signed kernel drivers. Local test-signed endpoint packages are useful for development, but they can install and still fail to load with Code 52 until test mode is allowed or the package is signed through Microsoft.
 
+Signing paths are part of the endpoint architecture:
+
+- Production attestation or WHQL/HLK signing is required before the ASIOA Windows endpoint driver should be advertised as loadable on normal Secure Boot systems.
+- Development TESTSIGNING can validate the endpoint locally only after the machine is configured for test-signed code, which usually means Secure Boot is disabled.
+- Microsoft preproduction signing can validate early builds with Secure Boot enabled on provisioned partner test machines, but those builds are not trusted on ordinary retail systems.
+- User-mode WASAPI/process capture remains the fallback for systems where kernel endpoint loading is not available yet.
+
 ## VST3 And CLAP Bridge Plug-Ins
 
 The VST3 and CLAP plug-ins are optional but useful:

@@ -58,4 +58,20 @@ The endpoint-driver staging script is:
 
 It uses the Microsoft Windows driver sample package as the current endpoint base, brands the package as ASIOA, disables Spectre mitigation for this local build when the matching libraries are absent, stages the INF/SYS/CAT files, and signs the catalog with the local ASIOA test certificate when available. The resulting endpoint package is not production-signed. If Secure Boot blocks TESTSIGNING, Windows will keep the device in Code 52 until the package is Microsoft signed.
 
+To inspect the current machine and installed endpoint state:
+
+```powershell
+.\scripts\check-driver-signing-state.ps1
+```
+
+To create a Microsoft Partner Center submission CAB from the staged endpoint package:
+
+```powershell
+.\scripts\package-endpoint-driver-submission.ps1
+```
+
+For production distribution, use Microsoft Partner Center attestation signing or WHQL/HLK signing. Attestation requires Hardware Developer Program access and an EV code-signing certificate, and Microsoft regenerates the signed catalog during the process. HLK/WHQL signing remains the stronger release path when full Windows certification and Windows Update distribution are needed.
+
+For development-only loading, Windows can load test-signed code when TESTSIGNING is enabled, but Microsoft documents that Secure Boot can prevent changing that option until Secure Boot is disabled. Microsoft also supports a preproduction signing path for partners that need Secure Boot enabled during early validation, but that requires Hardware Dev Center preproduction signing and explicit test-machine provisioning. Do not present either development path as a public end-user workaround.
+
 The current driver source is in `src\ASIOA.Driver`. It exposes the ASIO COM registration hooks, ASIO registry registration, channel names, sample-rate/buffer metadata, and safe silence until the engine/shared-memory transport is connected. The staged endpoint package is the first WDM/WASAPI/DirectSound visibility track, but it must pass Microsoft signing before ordinary Windows apps can rely on it on Secure Boot machines. VST3 builds, the native audio-policy helper for per-app output moves, and production driver signing remain separate hardening tracks.
