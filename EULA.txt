@@ -1,42 +1,56 @@
-ASIOA Audio Router Release Agreement
+ASIOA Audio Router License Agreement
 
-This installer contains the ASIOA Windows control app, native ASIOA ASIO driver
-package, route model, feedback-guard verification tool, accessibility support
-files, release notes, and documentation.
+This installer contains the ASIOA Audio Router Windows control application,
+ASIO host driver package, audio-routing configuration tools, feedback guard,
+accessibility support files, release notes, and documentation.
 
-Driver installation:
-The setup wizard can register the packaged ASIOA native ASIO driver for local
-testing with ASIO-capable hosts when ASIOA.Driver.dll and the driver install
-script are included in the installer. You may install the ASIO driver now, be
-reminded later, or install only the control panel. Driver registration requires
-administrator permission.
+ASIOA is designed to help route audio between Windows audio devices,
+ASIO-capable hosts, DAWs, virtual buses, accessibility audio paths, and
+supported audio applications. Some features require administrator permission
+because Windows audio driver registration and driver updates are system-level
+operations.
 
-Important current limitations:
-This package is intended for release evaluation, development, and hands-on local
-driver testing. The packaged native ASIO driver is not yet a publicly signed
-production driver, and it does not create a Windows speaker, microphone,
-WDM/WASAPI, or DirectSound endpoint in this build. Kernel-level audio capture,
-per-application system audio capture, Windows-visible endpoint exposure, and
-VST3 or CLAP bridge plug-ins are not complete production features in this
-build. Those components require additional implementation, licensing review
-where applicable, compatibility testing, and driver or code signing before
-broad public distribution.
+Driver and endpoint installation:
 
-By installing, you agree that:
+The installer may register or update the packaged ASIOA ASIO driver and, when
+included in a release package, the ASIOA Windows audio endpoint driver package.
+The ASIO driver is used by ASIO-capable hosts. The Windows audio endpoint
+driver package is used by applications that select normal Windows speaker and
+microphone devices through WDM, WASAPI, DirectSound, or related Windows audio
+APIs.
 
-1. The software is provided as-is for release evaluation and development.
-2. The installer may register the packaged ASIOA native ASIO driver when you
-   choose the driver installation option and the driver files are present.
-3. The current app can test and display the route model, feedback guard, channel
-   layout, buffering settings, startup settings, driver health, and accessibility
-   surface.
-4. The current package is not yet a finished, publicly signed virtual audio
-   device release for production use, and regular Windows apps will not see a
-   new ASIOA speaker or microphone until the WDM/WASAPI endpoint layer is added.
-5. Any public ASIO driver distribution must follow either Steinberg's GPLv3 ASIO
-   SDK path or a reviewed proprietary ASIO license path, plus the applicable
-   Windows driver and code-signing requirements.
-6. Accessibility features are under active development and should be tested with
-   NVDA, Narrator, and keyboard-only workflows before production use.
+When an existing ASIOA version is running, the installer may ask it to stop,
+disconnect active driver sessions, update files, register updated driver
+components, and then allow the user to launch ASIOA again. Active audio may
+pause or restart during installation or driver updates.
+
+License:
+
+1. ASIOA Audio Router is provided under the license included in LICENSE.txt,
+   with additional third-party notices listed in THIRD_PARTY_NOTICES.md.
+2. You may install and use ASIOA Audio Router on Windows systems you own or are
+   authorized to administer.
+3. You may not remove copyright, license, attribution, safety, or driver-signing
+   notices from redistributed copies.
+4. Driver components must be installed only through approved ASIOA installer,
+   repair, or uninstall flows.
+5. Audio drivers, plug-ins, and routing presets may affect system audio. You are
+   responsible for checking levels, avoiding feedback, and confirming routes
+   before using ASIOA in live, broadcast, recording, or accessibility-critical
+   environments.
+6. Public driver distribution must follow applicable Microsoft Windows driver
+   signing requirements and any applicable ASIO, plug-in SDK, or third-party
+   license requirements.
+7. Accessibility is a core product requirement. Please report unlabeled
+   controls, broken keyboard access, incorrect screen-reader announcements, or
+   focus problems so they can be fixed.
+
+No warranty:
+
+The software is provided as-is, without warranty of any kind, express or
+implied, including but not limited to warranties of merchantability, fitness for
+a particular purpose, and noninfringement. In no event shall the authors or
+copyright holders be liable for any claim, damages, or other liability arising
+from use of the software.
 
 See LICENSE.txt and THIRD_PARTY_NOTICES.md for source and dependency notices.

@@ -15,6 +15,7 @@ $appProject = Join-Path $root "src\ASIOA.App\ASIOA.App.csproj"
 $wxProject = Join-Path $root "src\ASIOA.Wx"
 $installerScript = Join-Path $root "installer\ASIOA-Audio-Router.iss"
 $nativeDriverBuild = Join-Path $root "scripts\build-native-driver.ps1"
+$endpointDriverPackage = "E:\Builds\asioa-audio-router\endpoint-driver"
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 $python = "py"
 $pythonSelector = "-V:Astral/CPython3.12.12"
@@ -36,6 +37,16 @@ Get-ChildItem $OutputDir -File -ErrorAction SilentlyContinue |
 dotnet build $solution -c $Configuration
 dotnet publish $appProject -c $Configuration -r win-x64 --self-contained true -o (Join-Path $PublishDir "wpf-secondary")
 & $nativeDriverBuild -Configuration $Configuration -PublishDriverDir (Join-Path $PublishDir "driver")
+Copy-Item -LiteralPath (Join-Path $root "scripts\install-asioa-endpoint-driver.ps1") -Destination (Join-Path $PublishDir "driver\install-asioa-endpoint-driver.ps1") -Force
+if (Test-Path $endpointDriverPackage) {
+    $endpointFiles = Get-ChildItem -LiteralPath $endpointDriverPackage -File -ErrorAction SilentlyContinue
+    if ($endpointFiles) {
+        $endpointDestination = Join-Path $PublishDir "driver\endpoint"
+        New-Item -ItemType Directory -Path $endpointDestination -Force | Out-Null
+        Copy-Item -Path (Join-Path $endpointDriverPackage "*") -Destination $endpointDestination -Recurse -Force
+        Write-Host "Bundled ASIOA endpoint driver package from $endpointDriverPackage"
+    }
+}
 
 Push-Location $wxProject
 try {
@@ -61,11 +72,11 @@ if (Test-Path $PublishDir) {
 Copy-Item -Path (Join-Path $wxAppDir "*") -Destination $PublishDir -Recurse -Force
 & $iscc $installerScript
 
-$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.2.10.zip"
+$portableZip = Join-Path $OutputDir "ASIOA-Audio-Router-win-x64-portable-0.3.0.zip"
 Compress-Archive -Path (Join-Path $PublishDir "*") -DestinationPath $portableZip -Force
 
 $checksumsPath = Join-Path $OutputDir "SHA256SUMS.txt"
-$installerArtifact = Join-Path $OutputDir "ASIOA-Audio-Router-Setup-0.2.10.exe"
+$installerArtifact = Join-Path $OutputDir "ASIOA-Audio-Router-Setup-0.3.0.exe"
 $releaseArtifactNames = @(
     (Split-Path -Leaf $installerArtifact),
     (Split-Path -Leaf $portableZip)

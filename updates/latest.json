@@ -1,9 +1,9 @@
 {
-    "app":  "ASIOA Audio Router",
-    "version":  "0.2.10",
-    "channel":  "Stable",
-    "notes":  "ASIOA 0.2.10 adds real driver-health behavior to the Overview action button, allowing the packaged ASIO driver to be enabled, repaired, or disabled from the control panel. It also makes routing labels clearer for ASIO host pairs, physical Windows devices, and planned WDM/WASAPI bridge pairs; improves installer behavior when ASIOA is already running; and explicitly explains that TeamTalk-style Windows sound devices require the separate endpoint-driver milestone.",
-    "installerUrl":  "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-Setup-0.2.10.exe",
-    "portableUrl":  "https://tappedin.fm/downloads/asioa/ASIOA-Audio-Router-win-x64-portable-0.2.10.zip",
-    "pageUrl":  "https://github.com/Raywonder/AudioRouter"
+  "app": "ASIOA Audio Router",
+  "version": "0.3.0",
+  "channel": "Private",
+  "notes": "ASIOA 0.3.0 switches updates to the private Blind.Software token feed, adds the official release agreement, changes monitoring to one exclusive path choice, improves routing wording for Windows audio endpoint work, and prepares the installer/update flow for endpoint-driver packages alongside the ASIO host driver.",
+  "installerUrl": "https://blind.software/?route=download&token=50cc14233f3125e8975c05b1312bb719d9d10a576483c404",
+  "portableUrl": "https://blind.software/?route=download&token=8057cf527f11c633ae16db33d8fdc3d4f6d546e78aebaa8d",
+  "pageUrl": "https://blind.software/?route=item&id=11"
 }

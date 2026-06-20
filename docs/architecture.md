@@ -18,6 +18,8 @@ Use WASAPI process loopback for individual app capture where supported. Microsof
 
 Use normal WASAPI endpoint capture for physical microphones and interface inputs that are not exposed through the ASIO driver path.
 
+The control panel also reads active Windows audio sessions through the Windows audio session APIs. It can adjust per-application volume and mute immediately. Moving an arbitrary running app to a different output device requires a native audio-policy helper, because Windows does not expose that reliably through the same high-level session volume API.
+
 ## Driver Backend Modes
 
 ASIOA Native is the primary intended driver mode. The control panel also models these backend modes so the engine can choose stable fallbacks where appropriate:
@@ -66,7 +68,20 @@ The virtual ASIO driver exposes the DAW-facing channel set:
 - stable channel names
 - feedback guard metadata enforced by the router engine
 
-The driver must be signed for normal Windows distribution. Installer scripts may register a packaged local DLL for development testing, but that does not make the driver a signed public release.
+Driver components must meet normal Windows signing requirements for broad distribution. Installer scripts may register packaged driver components, but Windows may block unsigned driver binaries until an approved signing path is used.
+
+## Windows Endpoint Driver
+
+The Windows endpoint driver is the layer that makes ASIOA appear as a normal speaker and microphone device to WDM, WASAPI, and DirectSound applications. This is separate from the ASIO COM driver.
+
+Current endpoint goals:
+
+- 2-in/2-out communication bridge first.
+- Feedback protection so master output 1/2 does not loop back into input 1/2 by default.
+- Later expansion from the first communication bridge to more exposed stereo pairs.
+- Native helper support for app-to-output routing when Windows permits it.
+
+Secure Boot systems require Microsoft-signed kernel drivers. Local test-signed endpoint packages are useful for development, but they can install and still fail to load with Code 52 until test mode is allowed or the package is signed through Microsoft.
 
 ## VST3 And CLAP Bridge Plug-Ins
 
@@ -89,6 +104,7 @@ The desktop app controls the engine and driver:
 
 - route matrix
 - application list
+- per-application session volume and mute controls
 - physical device list
 - input/output mute and gain
 - monitor/bypass mode

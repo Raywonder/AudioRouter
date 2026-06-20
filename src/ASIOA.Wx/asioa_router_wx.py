@@ -21,17 +21,23 @@ import wx.adv
 import wx.html2
 
 try:
+    from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+except Exception:  # pragma: no cover - optional Windows audio-session support.
+    AudioUtilities = None
+    ISimpleAudioVolume = None
+
+try:
     import winreg
 except ImportError:  # pragma: no cover - non-Windows dev/test environments.
     winreg = None
 
 
 APP_NAME = "ASIOA Audio Router"
-APP_VERSION = "0.2.10"
+APP_VERSION = "0.3.0"
 CHANNEL_COUNT = 68
 CHANNEL_PAIRS = [f"{left}-{left + 1}" for left in range(1, CHANNEL_COUNT, 2)]
 UPDATE_MANIFEST_URLS = [
-    "https://tappedin.fm/downloads/asioa/latest.json",
+    "https://blind.software/?route=download&token=962fa38a90d4b998e9d217b4f619ff3e58ff4b465f95ef56",
     "https://raw.githubusercontent.com/Raywonder/AudioRouter/main/updates/latest.json",
     "https://git.tappedin.fm/raywonder/audiorouter/raw/branch/main/updates/latest.json",
 ]
@@ -111,10 +117,14 @@ ASIOA_DRIVER_REGISTRY_PATH = r"SOFTWARE\ASIO\ASIOA Audio Router"
 COMMUNICATION_BRIDGE_INPUT = "ASIOA Communication input 1/2"
 COMMUNICATION_BRIDGE_OUTPUT = "ASIOA Communication output 1/2"
 WDM_ENDPOINT_MILESTONE = (
-    "TeamTalk, browsers, and ordinary Windows apps need a Windows WDM, WASAPI, or DirectSound "
-    "speaker and microphone endpoint. The packaged ASIOA driver is an ASIO host driver only, "
-    "so it appears to ASIO-capable hosts, not normal Windows sound-device lists."
+    "Regular Windows audio applications need a Windows WDM, WASAPI, or DirectSound "
+    "speaker and microphone endpoint. ASIOA can stage that endpoint package, but Windows must "
+    "trust and load the kernel driver before it appears in normal Windows sound-device lists."
 )
+MONITORING_MODES = [
+    "Monitor directly in ASIOA",
+    "Monitor through DAW, driver, or supported app",
+]
 _ASIOA_WINDOWS_ENDPOINT_CACHE: list[str] = []
 
 
@@ -202,7 +212,7 @@ def probe_asioa_windows_endpoints() -> list[str]:
             "-Command",
             "$items = @(); "
             "$items += Get-CimInstance Win32_SoundDevice -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'ASIOA' } | Select-Object -ExpandProperty Name; "
-            "$items += Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'ASIOA' -or $_.Name -match 'ASIOA' } | ForEach-Object { if ($_.FriendlyName) { $_.FriendlyName } else { $_.Name } }; "
+            "$items += Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' -and ($_.FriendlyName -match 'ASIOA' -or $_.Name -match 'ASIOA') } | ForEach-Object { if ($_.FriendlyName) { $_.FriendlyName } else { $_.Name } }; "
             "$items | Where-Object { $_ } | Sort-Object -Unique",
         ]
         result = run_hidden(command, capture_output=True, text=True, timeout=8, check=False)
@@ -217,6 +227,28 @@ def probe_asioa_windows_endpoints() -> list[str]:
         seen.add(name.lower())
         names.append(name)
     return names
+
+
+def probe_asioa_endpoint_problem() -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        command = [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "$device = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'ASIOA Audio Router Bridge' } | Select-Object -First 1; "
+            "if ($device -and $device.Status -ne 'OK') { "
+            "  $detail = pnputil /enum-devices /instanceid $device.InstanceId /properties 2>$null | Select-String -Pattern 'Problem Code|Problem Status|Driver Name' | ForEach-Object { $_.Line.Trim() }; "
+            "  'ASIOA endpoint present but not active. ' + ($detail -join '; ') "
+            "}",
+        ]
+        result = run_hidden(command, capture_output=True, text=True, timeout=8, check=False)
+        return " ".join(line.strip() for line in (result.stdout or "").splitlines() if line.strip())
+    except Exception:
+        return ""
 
 
 @dataclass(slots=True)
@@ -335,6 +367,7 @@ class DriverHealth:
     package_available: bool = False
     marker_present: bool = False
     windows_endpoint_names: list[str] = field(default_factory=list)
+    windows_endpoint_problem: str = ""
     error: str = ""
 
     @property
@@ -358,6 +391,30 @@ class DriverCapability:
 
     def sentence(self) -> str:
         return f"{self.name}: {self.status}. {self.detail}"
+
+
+@dataclass(slots=True)
+class AppAudioSession:
+    key: str
+    name: str
+    process_id: str = ""
+    output_device: str = "Default playback device"
+    volume: int = 100
+    muted: bool = False
+    route_target: str = "Default monitoring output"
+    state: str = "Active"
+    session: Any = None
+
+    def row(self) -> list[str]:
+        return [
+            self.name,
+            self.process_id or "System",
+            self.output_device,
+            f"{self.volume} percent",
+            "muted" if self.muted else "not muted",
+            self.route_target,
+            self.state,
+        ]
 
 
 @dataclass(slots=True)
@@ -465,6 +522,7 @@ class Settings:
     vst3_enabled: bool = True
     clap_enabled: bool = True
     vst2_enabled: bool = False
+    monitoring_mode: str = "Monitor directly in ASIOA"
     monitor_in_app: bool = True
     bypass_to_daw: bool = False
     monitor_volume: int = 100
@@ -473,7 +531,7 @@ class Settings:
     keep_engine_active: bool = True
     auto_check_updates: bool = True
     update_channel: str = "Stable"
-    update_source: str = "GitHub first, Gitea when available"
+    update_source: str = "Blind.Software first, GitHub and Gitea fallback"
     driver_install_option: str = "Install ASIOA ASIO driver now"
     driver_install_prompt_dismissed: bool = False
     default_monitor_device: str = "Main output 1/2"
@@ -487,6 +545,7 @@ class Settings:
     sessionwire_noise_floor_db: int = -60
     enable_builtin_sounds: bool = True
     silent_diagnostics: bool = True
+    app_route_targets: dict[str, str] = field(default_factory=dict)
     endpoints: list[Endpoint] = field(default_factory=list)
     routes: list[Route] = field(default_factory=list)
     effects: list[EffectSlot] = field(default_factory=list)
@@ -617,6 +676,12 @@ class Settings:
             return defaults
         try:
             raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            if "monitoring_mode" not in raw:
+                raw["monitoring_mode"] = (
+                    "Monitor through DAW, driver, or supported app"
+                    if raw.get("bypass_to_daw") and not raw.get("monitor_in_app", True)
+                    else "Monitor directly in ASIOA"
+                )
             for key, value in raw.items():
                 if key == "endpoints":
                     endpoint_fields = Endpoint.__dataclass_fields__
@@ -629,6 +694,10 @@ class Settings:
                     defaults.effects = [EffectSlot(**{field_name: item[field_name] for field_name in effect_fields if field_name in item}) for item in value]
                 elif hasattr(defaults, key):
                     setattr(defaults, key, value)
+            if defaults.monitoring_mode not in MONITORING_MODES:
+                defaults.monitoring_mode = "Monitor directly in ASIOA"
+            defaults.monitor_in_app = defaults.monitoring_mode == "Monitor directly in ASIOA"
+            defaults.bypass_to_daw = defaults.monitoring_mode == "Monitor through DAW, driver, or supported app"
             defaults.ensure_core_audio_policy()
             return defaults
         except Exception:
@@ -717,11 +786,15 @@ class ASIOAFrame(wx.Frame):
         self.route_list: wx.ListCtrl
         self.input_list: wx.ListCtrl
         self.output_list: wx.ListCtrl
+        self.app_audio_list: wx.ListCtrl
         self.effects_list: wx.ListCtrl
         self.plugin_param_list: wx.ListCtrl
         self.driver_action_button: wx.Button | None = None
         self.route_source_choice: wx.Choice | None = None
         self.route_destination_choice: wx.Choice | None = None
+        self.app_route_choice: wx.Choice | None = None
+        self.app_audio_sessions: list[AppAudioSession] = []
+        self.app_audio_action_buttons: dict[str, wx.Button] = {}
         self.controls: dict[str, wx.Window] = {}
         self.route_action_buttons: dict[str, wx.Button] = {}
         self.endpoint_action_buttons: dict[int, dict[str, wx.Button]] = {}
@@ -734,7 +807,9 @@ class ASIOAFrame(wx.Frame):
         self._last_saved_payload = ""
         self._last_announced_status = ""
         self._device_refresh_running = False
+        self._app_audio_refresh_running = False
         self._last_device_refresh_summary = "Device discovery will run quietly in the background."
+        self._last_app_audio_summary = "Application audio sessions will refresh quietly in the background."
         self.status_history: list[str] = []
         self.tray_icon: ASIOATrayIcon | None = None
         self._build_menu()
@@ -749,6 +824,9 @@ class ASIOAFrame(wx.Frame):
         self.device_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_device_timer, self.device_timer)
         self.device_timer.Start(30000)
+        self.app_audio_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_app_audio_timer, self.app_audio_timer)
+        self.app_audio_timer.Start(15000)
         self.plugin_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_plugin_timer, self.plugin_timer)
         self.plugin_timer.Start(PLUGIN_SCAN_INTERVAL_MS)
@@ -758,6 +836,7 @@ class ASIOAFrame(wx.Frame):
         self.update_overview()
         self.announce_startup_status()
         wx.CallAfter(self.refresh_devices)
+        wx.CallAfter(self.refresh_app_audio_sessions)
         wx.CallAfter(self.start_plugin_scan)
         if self.settings.auto_check_updates:
             wx.CallLater(4500, lambda: self.check_for_updates(auto=True))
@@ -826,7 +905,7 @@ class ASIOAFrame(wx.Frame):
             }.get(key, key.replace("_", " "))
             unit = " percent" if key == "monitor_volume" else (" dB" if key.endswith("_db") else " milliseconds")
             self.SetStatus(f"{label}, {value}{unit}.")
-        elif key in {"driver_mode", "smart_buffer_mode", "sample_rate", "buffer_size", "minimum_buffer", "maximum_buffer", "target_latency_ms", "jitter_safety_ms", "default_monitor_device", "system_audio_master_pair", "screen_reader_master_pair", "screen_reader_output", "update_source", "update_channel"}:
+        elif key in {"driver_mode", "smart_buffer_mode", "sample_rate", "buffer_size", "minimum_buffer", "maximum_buffer", "target_latency_ms", "jitter_safety_ms", "monitoring_mode", "default_monitor_device", "system_audio_master_pair", "screen_reader_master_pair", "screen_reader_output", "update_source", "update_channel"}:
             self.SetStatus(f"{key.replace('_', ' ').title()}, {getattr(self.settings, key)}.")
         elif key in {"monitor_in_app", "bypass_to_daw", "auto_raise_on_dropouts", "auto_lower_when_stable", "protect_daw_master_feedback", "live_effects_enabled", "vst3_enabled", "clap_enabled", "vst2_enabled", "sessionwire_white_noise_guard", "enable_builtin_sounds", "auto_check_updates", "run_on_startup", "start_minimized", "keep_engine_active"}:
             state = "on" if bool(getattr(self.settings, key)) else "off"
@@ -852,6 +931,7 @@ class ASIOAFrame(wx.Frame):
 
         self._add_overview_tab()
         self._add_routing_tab()
+        self._add_app_audio_tab()
         self._add_inputs_tab()
         self._add_outputs_tab()
         self._add_monitoring_tab()
@@ -910,7 +990,7 @@ class ASIOAFrame(wx.Frame):
             panel,
             sizer,
             "Routing guide:",
-            "Choose a source, then choose where it should go. Sources can be physical inputs, Windows recording devices, ASIO host inputs, DAW returns, or protected virtual buses. Destinations can be physical playback outputs, ASIO host outputs, DAW inputs, or virtual buses. The planned Windows app bridge entries describe the future TeamTalk/VB-Cable-style WDM endpoint layer; they are not Windows sound devices until that native endpoint driver is installed.",
+            "Choose a source, then choose where it should go. Sources can be physical inputs, Windows recording devices, ASIO host inputs, DAW returns, or protected virtual buses. Destinations can be physical playback outputs, ASIO host outputs, DAW inputs, or virtual buses. The planned Windows app bridge entries describe the Windows WDM, WASAPI, and DirectSound endpoint layer used by regular Windows audio applications.",
         )
         self.route_list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda event: self.on_route_list_selection(event))
         self.route_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda _event: self.update_route_action_labels())
@@ -931,6 +1011,53 @@ class ASIOAFrame(wx.Frame):
         self.populate_routes()
         self.ensure_list_selection(self.route_list)
         self.update_route_action_labels()
+
+    def _add_app_audio_tab(self) -> None:
+        panel, sizer = self._new_tab("Application Audio")
+        self.app_audio_list = self._make_list(
+            panel,
+            ["Application", "PID", "Current output", "Volume", "Mute state", "ASIOA route target", "State"],
+            "Running application audio sessions",
+        )
+        sizer.Add(self.app_audio_list, 1, wx.EXPAND | wx.ALL, 6)
+        self.app_audio_list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda event: self.on_app_audio_selection(event))
+        self.app_audio_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda _event: self.update_app_audio_action_labels())
+
+        route_row = wx.BoxSizer(wx.HORIZONTAL)
+        route_box = wx.BoxSizer(wx.VERTICAL)
+        route_box.Add(wx.StaticText(panel, label="Route selected app to:"), 0, wx.BOTTOM, 2)
+        self.app_route_choice = wx.Choice(panel, choices=self.route_endpoint_choices())
+        if self.app_route_choice.GetCount():
+            self.app_route_choice.SetSelection(0)
+        route_box.Add(self.app_route_choice, 0, wx.EXPAND)
+        route_row.Add(route_box, 1, wx.RIGHT, 8)
+        set_route = wx.Button(panel, label="Set selected app route target")
+        set_route.Bind(wx.EVT_BUTTON, self.set_selected_app_route)
+        set_route.Bind(wx.EVT_SET_FOCUS, lambda event, list_control=self.app_audio_list: self.on_action_button_focus(event, list_control))
+        route_row.Add(set_route, 0, wx.ALIGN_BOTTOM)
+        self.app_audio_action_buttons["set_route"] = set_route
+        sizer.Add(route_row, 0, wx.EXPAND | wx.ALL, 6)
+
+        actions = wx.BoxSizer(wx.HORIZONTAL)
+        for key, label, handler in [
+            ("mute", "Select an app to mute or unmute it", self.toggle_selected_app_mute),
+            ("volume_down", "Select an app to lower its volume 5 percent", lambda event: self.adjust_selected_app_volume(-5, event)),
+            ("volume_up", "Select an app to raise its volume 5 percent", lambda event: self.adjust_selected_app_volume(5, event)),
+            ("refresh", "Refresh application audio sessions", lambda event: self.refresh_app_audio_sessions(manual=True, event=event)),
+        ]:
+            button = wx.Button(panel, label=label)
+            button.Bind(wx.EVT_BUTTON, handler)
+            button.Bind(wx.EVT_SET_FOCUS, lambda event, list_control=self.app_audio_list: self.on_action_button_focus(event, list_control))
+            self.app_audio_action_buttons[key] = button
+            actions.Add(button, 0, wx.RIGHT, 6)
+        sizer.Add(actions, 0, wx.ALL, 6)
+        self._add_readonly_text(
+            panel,
+            sizer,
+            "Application audio routing:",
+            "ASIOA can read and adjust running Windows application audio sessions here. Volume and mute are applied immediately. The route target is saved for the ASIOA engine and native helper; Windows output-device switching needs the native audio-policy helper before it can move every app automatically.",
+        )
+        self.populate_app_audio_sessions()
 
     def _add_inputs_tab(self) -> None:
         panel, sizer = self._new_tab("Inputs")
@@ -962,8 +1089,14 @@ class ASIOAFrame(wx.Frame):
 
     def _add_monitoring_tab(self) -> None:
         panel, sizer = self._new_tab("Monitoring")
-        self.controls["monitor_in_app"] = self._add_checkbox(panel, sizer, "Monitor directly in ASIOA", self.settings.monitor_in_app)
-        self.controls["bypass_to_daw"] = self._add_checkbox(panel, sizer, "Bypass ASIOA monitoring and route directly through the DAW", self.settings.bypass_to_daw)
+        self.controls["monitoring_mode"] = self._add_choice(
+            panel,
+            sizer,
+            "Monitoring path:",
+            MONITORING_MODES,
+            self.settings.monitoring_mode,
+            "Choose where live monitoring is heard. Only one monitoring path is active at a time.",
+        )
         self.controls["default_monitor_device"] = self._add_choice(
             panel,
             sizer,
@@ -990,7 +1123,7 @@ class ASIOAFrame(wx.Frame):
             panel,
             sizer,
             "Monitoring note:",
-            "Monitoring can be direct, bypassed through the DAW, or both. Direct monitoring uses the selected driver mode and smart buffer settings.",
+            "Monitoring can be direct in ASIOA, or routed through the selected DAW, driver, or supported application. Choosing one path automatically turns the other path off.",
         )
 
     def _add_buffer_tab(self) -> None:
@@ -1130,7 +1263,8 @@ class ASIOAFrame(wx.Frame):
             sizer,
             "Update source:",
             [
-                "GitHub first, Gitea when available",
+                "Blind.Software first, GitHub and Gitea fallback",
+                "Blind.Software only",
                 "GitHub only",
                 "Gitea only when available",
                 "Both must match",
@@ -1275,6 +1409,8 @@ class ASIOAFrame(wx.Frame):
         self.ensure_list_selection(control)
         if control is getattr(self, "route_list", None):
             self.update_route_action_labels()
+        elif control is getattr(self, "app_audio_list", None):
+            self.update_app_audio_action_labels()
         else:
             self.update_endpoint_action_labels(control)
         event.Skip()
@@ -1358,6 +1494,30 @@ class ASIOAFrame(wx.Frame):
                     self._check_list_row(control, row, endpoint.enabled)
         self._populating_lists = False
 
+    def populate_app_audio_sessions(self) -> None:
+        if not hasattr(self, "app_audio_list"):
+            return
+        self._populating_lists = True
+        self.app_audio_list.DeleteAllItems()
+        for session in self.app_audio_sessions:
+            self._append_row(self.app_audio_list, session.row())
+        if not self.app_audio_sessions:
+            self._append_row(
+                self.app_audio_list,
+                [
+                    "No active application audio sessions detected",
+                    "None",
+                    "Default playback device",
+                    "0 percent",
+                    "not muted",
+                    "Default monitoring output",
+                    self._last_app_audio_summary,
+                ],
+            )
+        self._populating_lists = False
+        self.ensure_list_selection(self.app_audio_list)
+        self.update_app_audio_action_labels()
+
     def populate_effects(self) -> None:
         self._populating_lists = True
         self.effects_list.DeleteAllItems()
@@ -1437,6 +1597,14 @@ class ASIOAFrame(wx.Frame):
             self.SetStatus(f"{effect.name}, {'enabled' if checked else 'disabled'}.")
         event.Skip()
 
+    def on_app_audio_selection(self, event: wx.ListEvent) -> None:
+        self.remember_list_selection(self.app_audio_list, event.GetIndex())
+        session = self.selected_app_session()
+        if session is not None and self.app_route_choice is not None:
+            self.set_choice_items(self.app_route_choice, self.route_endpoint_choices(), session.route_target)
+        self.update_app_audio_action_labels()
+        event.Skip()
+
     def selected_index(self, control: wx.ListCtrl) -> int:
         return self.ensure_list_selection(control)
 
@@ -1445,6 +1613,14 @@ class ASIOAFrame(wx.Frame):
         if index < 0 or index >= len(self.settings.routes):
             return None
         return self.settings.routes[index]
+
+    def selected_app_session(self) -> AppAudioSession | None:
+        if not hasattr(self, "app_audio_list"):
+            return None
+        index = self.selected_index(self.app_audio_list)
+        if index < 0 or index >= len(self.app_audio_sessions):
+            return None
+        return self.app_audio_sessions[index]
 
     def selected_effect(self) -> EffectSlot | None:
         if not hasattr(self, "effects_list"):
@@ -1487,6 +1663,32 @@ class ASIOAFrame(wx.Frame):
             }
         for key, label in labels.items():
             button = self.route_action_buttons.get(key)
+            if button:
+                button.SetLabel(label)
+                button.SetName(label)
+
+    def update_app_audio_action_labels(self) -> None:
+        if not hasattr(self, "app_audio_action_buttons"):
+            return
+        session = self.selected_app_session()
+        if session is None:
+            labels = {
+                "set_route": "Select an app to set its route target",
+                "mute": "Select an app to mute or unmute it",
+                "volume_down": "Select an app to lower its volume 5 percent",
+                "volume_up": "Select an app to raise its volume 5 percent",
+                "refresh": "Refresh application audio sessions",
+            }
+        else:
+            labels = {
+                "set_route": f"Set route target for {session.name}",
+                "mute": f"{'Unmute' if session.muted else 'Mute'} {session.name}",
+                "volume_down": f"Lower {session.name} volume 5 percent",
+                "volume_up": f"Raise {session.name} volume 5 percent",
+                "refresh": "Refresh application audio sessions",
+            }
+        for key, label in labels.items():
+            button = self.app_audio_action_buttons.get(key)
             if button:
                 button.SetLabel(label)
                 button.SetName(label)
@@ -1620,6 +1822,164 @@ class ASIOAFrame(wx.Frame):
         self.mark_settings_dirty()
         self.SetStatus(f"Removed route {self.route_action_name(removed)}.")
         self.refocus_action_button(_event)
+
+    def refresh_app_audio_sessions(self, manual: bool = False, event: wx.Event | None = None) -> None:
+        if self._app_audio_refresh_running:
+            if manual:
+                self.SetStatus("Application audio refresh is already running.")
+                self.refocus_action_button(event)
+            return
+        self._app_audio_refresh_running = True
+        threading.Thread(target=self.app_audio_refresh_worker, name="ASIOAAppAudioRefresh", daemon=True).start()
+        if manual:
+            self.SetStatus("Refreshing application audio sessions.")
+            self.refocus_action_button(event)
+
+    def app_audio_refresh_worker(self) -> None:
+        sessions: list[AppAudioSession] = []
+        error = ""
+        if AudioUtilities is None or ISimpleAudioVolume is None:
+            error = "Application audio control dependency is not installed. Install pycaw and comtypes, then restart ASIOA."
+            wx.CallAfter(self.finish_app_audio_refresh, sessions, error)
+            return
+        try:
+            for raw_session in AudioUtilities.GetAllSessions():
+                process = getattr(raw_session, "Process", None)
+                process_id = ""
+                name = "System sounds"
+                if process is not None:
+                    try:
+                        process_id = str(process.pid)
+                    except Exception:
+                        process_id = ""
+                    try:
+                        name = process.name() or name
+                    except Exception:
+                        name = "Application audio"
+                session_key = f"{name}:{process_id or 'system'}"
+                volume = 100
+                muted = False
+                try:
+                    simple_volume = raw_session._ctl.QueryInterface(ISimpleAudioVolume)
+                    volume = int(round(float(simple_volume.GetMasterVolume()) * 100))
+                    muted = bool(simple_volume.GetMute())
+                except Exception:
+                    pass
+                route_target = self.settings.app_route_targets.get(session_key, self.settings.default_monitor_device)
+                sessions.append(
+                    AppAudioSession(
+                        key=session_key,
+                        name=name,
+                        process_id=process_id,
+                        output_device="Default playback device",
+                        volume=volume,
+                        muted=muted,
+                        route_target=route_target,
+                        state="Active",
+                        session=raw_session,
+                    )
+                )
+        except Exception as exc:
+            error = str(exc)
+        sessions.sort(key=lambda item: (item.name.lower(), item.process_id))
+        wx.CallAfter(self.finish_app_audio_refresh, sessions, error)
+
+    def finish_app_audio_refresh(self, sessions: list[AppAudioSession], error: str) -> None:
+        self._app_audio_refresh_running = False
+        if error:
+            self._last_app_audio_summary = f"Application audio session refresh was delayed: {error}"
+            write_log(self._last_app_audio_summary)
+        else:
+            self.app_audio_sessions = sessions
+            self._last_app_audio_summary = f"Application audio refresh found {len(sessions)} active sessions."
+            write_log(self._last_app_audio_summary)
+        selected_session = self.selected_app_session()
+        selected_name = selected_session.key if selected_session else None
+        self.populate_app_audio_sessions()
+        if selected_name:
+            for row, session in enumerate(self.app_audio_sessions):
+                if session.key == selected_name:
+                    self.restore_list_selection(self.app_audio_list, row, focus_row=False)
+                    break
+        self.update_overview()
+
+    def set_selected_app_route(self, event: wx.CommandEvent) -> None:
+        session = self.selected_app_session()
+        if session is None:
+            self.SetStatus("No application audio session selected.")
+            self.refocus_action_button(event)
+            return
+        target = self.app_route_choice.GetStringSelection() if self.app_route_choice else self.settings.default_monitor_device
+        if not target:
+            target = self.settings.default_monitor_device
+        session.route_target = target
+        self.settings.app_route_targets[session.key] = target
+        selected_key = session.key
+        self.populate_app_audio_sessions()
+        for row, refreshed in enumerate(self.app_audio_sessions):
+            if refreshed.key == selected_key:
+                self.restore_list_selection(self.app_audio_list, row, focus_row=False)
+                break
+        self.update_app_audio_action_labels()
+        self.mark_settings_dirty()
+        self.SetStatus(f"{session.name}, route target set to {target}.")
+        self.refocus_action_button(event)
+
+    def selected_app_volume_interface(self, session: AppAudioSession) -> Any | None:
+        try:
+            return session.session._ctl.QueryInterface(ISimpleAudioVolume) if session.session is not None and ISimpleAudioVolume is not None else None
+        except Exception:
+            return None
+
+    def toggle_selected_app_mute(self, event: wx.CommandEvent) -> None:
+        session = self.selected_app_session()
+        if session is None:
+            self.SetStatus("No application audio session selected.")
+            self.refocus_action_button(event)
+            return
+        volume_interface = self.selected_app_volume_interface(session)
+        if volume_interface is None:
+            self.SetStatus(f"{session.name} does not expose an adjustable Windows audio-session mute control.")
+            self.refocus_action_button(event)
+            return
+        session.muted = not session.muted
+        try:
+            volume_interface.SetMute(1 if session.muted else 0, None)
+        except Exception as exc:
+            self.SetStatus(f"Could not update mute for {session.name}. {exc}")
+            self.refocus_action_button(event)
+            return
+        index = self.selected_index(self.app_audio_list)
+        self.populate_app_audio_sessions()
+        self.restore_list_selection(self.app_audio_list, index, focus_row=False)
+        self.update_app_audio_action_labels()
+        self.SetStatus(f"{session.name}, {'muted' if session.muted else 'unmuted'}.")
+        self.refocus_action_button(event)
+
+    def adjust_selected_app_volume(self, delta: int, event: wx.Event | None = None) -> None:
+        session = self.selected_app_session()
+        if session is None:
+            self.SetStatus("No application audio session selected.")
+            self.refocus_action_button(event)
+            return
+        volume_interface = self.selected_app_volume_interface(session)
+        if volume_interface is None:
+            self.SetStatus(f"{session.name} does not expose an adjustable Windows audio-session volume control.")
+            self.refocus_action_button(event)
+            return
+        session.volume = max(0, min(100, session.volume + delta))
+        try:
+            volume_interface.SetMasterVolume(session.volume / 100.0, None)
+        except Exception as exc:
+            self.SetStatus(f"Could not update volume for {session.name}. {exc}")
+            self.refocus_action_button(event)
+            return
+        index = self.selected_index(self.app_audio_list)
+        self.populate_app_audio_sessions()
+        self.restore_list_selection(self.app_audio_list, index, focus_row=False)
+        self.update_app_audio_action_labels()
+        self.SetStatus(f"{session.name}, volume {session.volume} percent.")
+        self.refocus_action_button(event)
 
     def add_plugin_to_rack(self, event: wx.CommandEvent) -> None:
         wildcard = "Audio plug-ins (*.vst3;*.clap;*.dll)|*.vst3;*.clap;*.dll|VST3 plug-ins (*.vst3)|*.vst3|CLAP plug-ins (*.clap)|*.clap|Legacy VST2 DLLs (*.dll)|*.dll|All files (*.*)|*.*"
@@ -1780,6 +2140,8 @@ class ASIOAFrame(wx.Frame):
                 setattr(self.settings, key, control.GetValue())
             elif isinstance(control, wx.Slider):
                 setattr(self.settings, key, control.GetValue())
+        self.settings.monitor_in_app = self.settings.monitoring_mode == "Monitor directly in ASIOA"
+        self.settings.bypass_to_daw = self.settings.monitoring_mode == "Monitor through DAW, driver, or supported app"
 
     def driver_package_path(self) -> Path:
         return resource_path("driver", "install-asioa-driver.ps1")
@@ -1797,6 +2159,7 @@ class ASIOAFrame(wx.Frame):
             package_available=package_available,
             marker_present=marker_present,
             windows_endpoint_names=discover_asioa_windows_endpoints(),
+            windows_endpoint_problem=probe_asioa_endpoint_problem(),
         )
         if winreg is None:
             health.error = "Windows registry access is unavailable in this runtime."
@@ -1843,13 +2206,14 @@ class ASIOAFrame(wx.Frame):
             install_state = "The ASIOA control panel is installed. The native ASIO driver package is not bundled with this build yet."
         if health.windows_endpoint_present:
             endpoint_state = "Windows-visible ASIOA endpoint detected: " + ", ".join(health.windows_endpoint_names) + "."
+        elif health.windows_endpoint_problem:
+            endpoint_state = health.windows_endpoint_problem + ". This machine is blocking the endpoint driver until an approved kernel signing path or test-signing environment is available."
         else:
             endpoint_state = "Windows-visible ASIOA speaker or microphone endpoint is not detected yet. Ordinary Windows apps can still use their normal devices while ASIOA models the communication bridge."
         lines = [
             install_state,
             endpoint_state,
-            "The current packaged driver exposes the ASIOA 68-in and 68-out ASIO surface to ASIO-capable hosts. The Windows WDM, WASAPI, and DirectSound endpoint layer is the next native-driver milestone.",
-            WDM_ENDPOINT_MILESTONE,
+            "The current ASIO driver registration exposes ASIOA to ASIO-capable hosts. The Windows WDM, WASAPI, and DirectSound endpoint package is staged separately and must load cleanly before ordinary Windows apps can select ASIOA as a speaker or microphone device.",
             "miniaudio, WASAPI, PortAudio, JACK, and ASIO4ALL compatibility modes remain available for control-panel configuration, device discovery, and bridge planning.",
         ]
         if health.dll_path:
@@ -1861,7 +2225,7 @@ class ASIOAFrame(wx.Frame):
     def driver_capability_map(self) -> list[DriverCapability]:
         health = self.installed_driver_health()
         asio_status = "available" if health.healthy else ("repair needed" if health.registered else "not installed")
-        windows_status = "detected" if health.windows_endpoint_present else "not exposed yet"
+        windows_status = "detected" if health.windows_endpoint_present else ("blocked by Windows driver signing" if health.windows_endpoint_problem else "not exposed yet")
         return [
             DriverCapability(
                 "ASIO host surface",
@@ -1876,7 +2240,7 @@ class ASIOAFrame(wx.Frame):
             DriverCapability(
                 "Windows WDM/WASAPI/DirectSound endpoint",
                 windows_status,
-                WDM_ENDPOINT_MILESTONE,
+                health.windows_endpoint_problem or WDM_ENDPOINT_MILESTONE,
             ),
             DriverCapability(
                 "Per-application WASAPI capture",
@@ -2201,6 +2565,7 @@ class ASIOAFrame(wx.Frame):
         choices = self.route_endpoint_choices()
         self.set_choice_items(self.route_source_choice, choices)
         self.set_choice_items(self.route_destination_choice, choices)
+        self.set_choice_items(self.app_route_choice, choices)
         monitor_control = self.controls.get("default_monitor_device")
         if isinstance(monitor_control, wx.Choice):
             self.set_choice_items(monitor_control, self.monitor_device_choices(), self.settings.default_monitor_device)
@@ -2217,6 +2582,9 @@ class ASIOAFrame(wx.Frame):
 
     def on_device_timer(self, _event: wx.TimerEvent) -> None:
         self.refresh_devices()
+
+    def on_app_audio_timer(self, _event: wx.TimerEvent) -> None:
+        self.refresh_app_audio_sessions()
 
     def on_plugin_timer(self, _event: wx.TimerEvent) -> None:
         self.start_plugin_scan()
@@ -2387,6 +2755,8 @@ class ASIOAFrame(wx.Frame):
         raise RuntimeError(last_error or "No update manifest could be read.")
 
     def update_manifest_urls(self) -> list[str]:
+        if self.settings.update_source == "Blind.Software only":
+            return [UPDATE_MANIFEST_URLS[0]]
         if self.settings.update_source == "GitHub only":
             return [UPDATE_MANIFEST_URLS[1]]
         if self.settings.update_source == "Gitea only when available":
@@ -2497,6 +2867,7 @@ class ASIOAFrame(wx.Frame):
                 f"Diagnostics inbox: {DIAGNOSTICS_INBOX}",
                 f"Log file: {LOG_PATH}",
                 f"Last device discovery: {self._last_device_refresh_summary}",
+                f"Last application audio refresh: {self._last_app_audio_summary}",
             ]
         )
 
@@ -2517,6 +2888,10 @@ class ASIOAFrame(wx.Frame):
         driver_status = "".join(f"<li>{line}</li>" for line in self.driver_status_lines())
         capability_status = "".join(f"<li>{capability.sentence()}</li>" for capability in self.driver_capability_map())
         plugin_status = "".join(f"<li>{line}</li>" for line in self.plugin_inventory.status_lines())
+        app_audio = "".join(
+            f"<li>{session.name}.<br>PID: {session.process_id or 'System'}.<br>Volume: {session.volume} percent.<br>Mute state: {'muted' if session.muted else 'not muted'}.<br>Route target: {session.route_target}.</li>"
+            for session in self.app_audio_sessions
+        )
         return f"""<!doctype html>
 <html>
 <head>
@@ -2551,6 +2926,7 @@ class ASIOAFrame(wx.Frame):
   <h2>Device discovery</h2>
   <ul>
     <li>{self._last_device_refresh_summary}</li>
+    <li>{self._last_app_audio_summary}</li>
     <li>Control panel log: {LOG_PATH}</li>
   </ul>
   <h2>Recent status</h2>
@@ -2567,6 +2943,8 @@ class ASIOAFrame(wx.Frame):
   <h2>Plug-in inventory</h2>
   <ul>{plugin_status}</ul>
   <p>Plug-in processing can stay disabled while ASIOA still scans installed VST3, CLAP, and legacy VST2 plug-ins in the background.</p>
+  <h2>Application audio sessions</h2>
+  <ul>{app_audio or '<li>No active application audio sessions detected.</li>'}</ul>
   <h2>Endpoints</h2>
   <ul>{endpoints}</ul>
   <h2>Effects</h2>

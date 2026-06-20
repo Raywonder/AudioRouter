@@ -1,5 +1,5 @@
 #define MyAppName "ASIOA Audio Router"
-#define MyAppVersion "0.2.10"
+#define MyAppVersion "0.3.0"
 #define MyAppPublisher "Raywonder"
 #define MyAppExeName "ASIOA Audio Router.exe"
 #define SourceRoot "E:\Builds\asioa-audio-router\publish"
@@ -14,7 +14,7 @@ DefaultGroupName=ASIOA Audio Router
 DisableProgramGroupPage=yes
 LicenseFile=..\EULA.txt
 OutputDir=E:\Downloads\asioa-audio-router
-OutputBaseFilename=ASIOA-Audio-Router-Setup-0.2.10
+OutputBaseFilename=ASIOA-Audio-Router-Setup-0.3.0
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -43,6 +43,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\driver\install-asioa-driver.ps1"""; Description: "Register packaged ASIOA native ASIO driver"; Flags: runhidden skipifdoesntexist; Check: ShouldInstallDriverNow
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\driver\install-asioa-endpoint-driver.ps1"""; Description: "Install packaged ASIOA Windows audio endpoint driver"; Flags: runhidden skipifdoesntexist; Check: ShouldInstallEndpointDriverNow
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch ASIOA Audio Router"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -63,7 +64,7 @@ begin
     wpSelectTasks,
     'ASIOA Audio Driver',
     'Choose how ASIOA should handle the packaged native ASIO driver.',
-    'If this installer includes ASIOA.Driver.dll, it can register the packaged ASIO driver for ASIO-capable hosts. Windows speaker and microphone endpoint support, the kind ordinary apps such as TeamTalk need, is a separate native-driver milestone. You can register the ASIO driver now, be reminded later, or install only the control panel.',
+    'If this installer includes ASIOA.Driver.dll, it can register the packaged ASIO driver for ASIO-capable hosts. If this release also includes an ASIOA Windows endpoint driver package, the installer can install or update the Windows speaker and microphone endpoints used by regular Windows audio applications. You can register the ASIO driver now, be reminded later, or install only the control panel.',
     True,
     False
   );
@@ -76,8 +77,7 @@ end;
 function ShouldInstallDriverNow(): Boolean;
 begin
   Result :=
-    Assigned(DriverPage) and
-    (DriverPage.SelectedValueIndex = 0) and
+    ((not Assigned(DriverPage)) or (DriverPage.SelectedValueIndex = 0)) and
     FileExists(ExpandConstant('{app}\driver\install-asioa-driver.ps1')) and
     FileExists(ExpandConstant('{app}\driver\ASIOA.Driver.dll'));
 end;
@@ -85,6 +85,14 @@ end;
 function ShouldRunDriverUninstall(): Boolean;
 begin
   Result := FileExists(ExpandConstant('{app}\driver\uninstall-asioa-driver.ps1'));
+end;
+
+function ShouldInstallEndpointDriverNow(): Boolean;
+begin
+  Result :=
+    ((not Assigned(DriverPage)) or (DriverPage.SelectedValueIndex = 0)) and
+    FileExists(ExpandConstant('{app}\driver\install-asioa-endpoint-driver.ps1')) and
+    DirExists(ExpandConstant('{app}\driver\endpoint'));
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

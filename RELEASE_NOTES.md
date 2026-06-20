@@ -1,7 +1,15 @@
+# ASIOA Audio Router 0.3.0
+
+- Updates now check the private Blind.Software token feed first, so private admin builds can be offered without making the Blind.Software submission public.
+- The installer agreement is now the official ASIOA Audio Router license agreement used going forward.
+- Monitoring is now one exclusive choice: monitor directly in ASIOA, or monitor through the selected DAW, driver, or supported application.
+- Public wording now describes Windows audio endpoint support generically for regular Windows audio applications instead of naming specific apps.
+- Installer and update packaging are prepared for a Windows WDM/WASAPI/DirectSound endpoint driver package when the required WDK kernel-mode driver build tools and signing path are available.
+
 # ASIOA Audio Router 0.2.10
 
 - Overview driver action now changes based on real driver health: if the ASIO driver is registered and the DLL exists, the button becomes "Disable ASIOA ASIO driver"; otherwise it offers enable or repair.
-- Driver status now clearly separates the installed ASIO host driver from the future Windows WDM/WASAPI/DirectSound endpoint layer needed by ordinary apps such as TeamTalk.
+- Driver status now clearly separates the installed ASIO host driver from the future Windows WDM/WASAPI/DirectSound endpoint layer needed by regular Windows audio applications.
 - Routing names now distinguish ASIO host pairs, physical Windows playback/recording devices, and planned Windows app bridge pairs so users can tell what is routable today and what needs the endpoint-driver milestone.
 - The Routing tab includes a plain-language guide explaining how to route a source to a destination and why planned bridge entries do not yet appear as Windows sound devices.
 - The installer now closes a running ASIOA control panel before updating, keeps installation in Program Files, and registers the packaged ASIO driver after unregistering the previous DLL.
@@ -76,7 +84,7 @@ This hotfix cleans up routing and plug-in-rack accessibility so the control pane
 
 # ASIOA Audio Router 0.2.5
 
-This build is packaged for hands-on local driver testing, not only control-panel preview.
+This build is packaged with the native ASIO driver path, not only the control-panel preview.
 
 ## Added
 

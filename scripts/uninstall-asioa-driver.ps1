@@ -9,11 +9,16 @@ if (-not $isAdmin) {
 
 if (Test-Path $driverDll) {
     $regsvr = Join-Path $env:WINDIR "System32\regsvr32.exe"
-    & $regsvr /s /u $driverDll
-    if ($LASTEXITCODE -ne 0) {
-        throw "regsvr32 failed while unregistering ASIOA.Driver.dll. Exit code: $LASTEXITCODE"
+    $unregister = Start-Process -FilePath $regsvr -ArgumentList @("/s", "/u", $driverDll) -Wait -PassThru
+    if ($unregister.ExitCode -ne 0) {
+        Write-Warning "regsvr32 did not fully unregister ASIOA.Driver.dll. Exit code: $($unregister.ExitCode)"
     }
 }
+
+$driverName = "ASIOA Audio Router"
+$clsid = "{4B6B66F3-0182-4E8B-9B7C-0C545022110A}"
+Remove-Item -Path "HKLM:\SOFTWARE\ASIO\$driverName" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "HKLM:\SOFTWARE\Classes\CLSID\$clsid" -Recurse -Force -ErrorAction SilentlyContinue
 
 $settingsDir = Join-Path $env:APPDATA "ASIOA Audio Router"
 $marker = Join-Path $settingsDir "driver-installed.json"

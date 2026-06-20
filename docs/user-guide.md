@@ -4,9 +4,9 @@
 
 ASIOA Audio Router is the control application for the ASIOA routing system. It manages DAW channels, application feeds, monitoring, buffering, startup behavior, and diagnostics.
 
-The current build contains the stable routing model, accessible wxPython control surface, and a packaged native ASIO driver. If the installer package includes `ASIOA.Driver.dll`, the installer can register that packaged ASIO driver for local testing with ASIO-capable hosts. Unsigned local builds are not public signed driver releases. The driver capability map in the Overview shows what is installed, what is only modeled, and whether any ASIOA Windows speaker or microphone endpoint is actually visible to Windows.
+The current build contains the stable routing model, accessible wxPython control surface, and a packaged native ASIO driver. If the installer package includes `ASIOA.Driver.dll`, the installer can register that packaged ASIO driver for ASIO-capable hosts. Windows may block unsigned driver binaries until an approved signing path is used. The driver capability map in the Overview shows what is installed, what is only modeled, and whether any ASIOA Windows speaker or microphone endpoint is actually visible to Windows.
 
-Important: the packaged ASIO driver is not the same as a Windows WDM, WASAPI, or DirectSound endpoint. Regular Windows apps will not see a new ASIOA microphone or speaker until that endpoint layer is added.
+Important: the ASIO driver is not the same as a Windows WDM, WASAPI, or DirectSound endpoint. Regular Windows apps will not see a new ASIOA microphone or speaker until the endpoint driver is installed and Windows loads it successfully. On Secure Boot machines, local test-signed endpoint drivers can be blocked with Code 52 until a Microsoft signing path is used.
 
 ## Starting The App
 
@@ -37,6 +37,12 @@ Use this tab to review DAW input channels, DAW output channels, and configured r
 - Routes show source, destination, enabled state, mute state, monitoring state, and gain.
 
 The `Test feedback guard` button verifies that DAW Master 1/2 cannot be routed back into Capture A 1/2 unless unsafe routing is explicitly enabled in a future advanced mode.
+
+### Application Audio
+
+Use this tab to see running Windows audio sessions. ASIOA shows the application name, process ID, current output label, volume, mute state, ASIOA route target, and state.
+
+The volume and mute buttons act immediately on the selected Windows audio session. The route target selector saves where ASIOA should route that app once the native engine and audio-policy helper are active. If Windows does not expose an adjustable audio session for an app, ASIOA reports that in the status line instead of failing silently.
 
 ### Inputs
 

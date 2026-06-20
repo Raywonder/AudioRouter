@@ -31,6 +31,11 @@ if ($DriverDllPath) {
     }
     $sdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10"
     $sdkVersion = Get-ChildItem (Join-Path $sdkRoot "Include") -Directory -ErrorAction SilentlyContinue |
+        Where-Object {
+            (Test-Path (Join-Path $_.FullName "um\windows.h")) -and
+            (Test-Path (Join-Path $_.FullName "shared\guiddef.h")) -and
+            (Test-Path (Join-Path $sdkRoot "Lib\$($_.Name)\um\x64"))
+        } |
         Sort-Object Name -Descending |
         Select-Object -First 1
     if (-not $sdkVersion) {
@@ -72,7 +77,12 @@ if ($DriverDllPath) {
         $objects += $object
     }
     $dll = Join-Path $outDir "ASIOA.Driver.dll"
-    & $link /NOLOGO /DLL /OUT:$dll $objects advapi32.lib ole32.lib uuid.lib shell32.lib
+    & $link /NOLOGO /DLL /OUT:$dll `
+        /EXPORT:DllCanUnloadNow `
+        /EXPORT:DllGetClassObject `
+        /EXPORT:DllRegisterServer `
+        /EXPORT:DllUnregisterServer `
+        $objects advapi32.lib ole32.lib uuid.lib shell32.lib
     if ($LASTEXITCODE -ne 0) {
         throw "Native driver link failed with exit code $LASTEXITCODE."
     }
@@ -92,5 +102,5 @@ Write-Host "ASIOA native driver DLL: $dll"
 Write-Host "Published driver package to: $PublishDriverDir"
 Write-Host "Driver Authenticode status: $($signature.Status)"
 if ($signature.Status -ne "Valid") {
-    Write-Warning "The packaged ASIOA.Driver.dll is not signed with a valid Authenticode signature. Treat this as a local/dev driver package, not a public signed driver."
+    Write-Warning "The packaged ASIOA.Driver.dll is not signed with a valid Authenticode signature. Windows may block driver installation until an approved signing path is used."
 }
