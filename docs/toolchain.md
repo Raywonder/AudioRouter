@@ -64,6 +64,8 @@ To inspect the current machine and installed endpoint state:
 .\scripts\check-driver-signing-state.ps1
 ```
 
+For the full signing decision table, including free development test signing, Microsoft preproduction signing, Partner Center attestation, and HLK/WHQL, see `docs\driver-signing-options.md`.
+
 To create a Microsoft Partner Center submission CAB from the staged endpoint package:
 
 ```powershell
